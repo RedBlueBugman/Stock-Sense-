@@ -40,6 +40,7 @@ export const DeliveryPage: React.FC<DeliveryPageProps> = ({
   const [deliveryCounter, setDeliveryCounter] = useState<number>(1);
   const [customerName, setCustomerName] = useState<string>('Customer #1234 - Apex Logistics Inc');
   const [shippingAddress, setShippingAddress] = useState<string>('Bay 4, 100 Industrial Parkway');
+  const [deliveryDate, setDeliveryDate] = useState<string>(new Date().toISOString().split('T')[0]);
   const [status, setStatus] = useState<'draft' | 'shipped'>('draft');
   const [deliveryItems, setDeliveryItems] = useState<DeliveryItem[]>([]);
   const [isScannerOpen, setIsScannerOpen] = useState<boolean>(false);
@@ -259,6 +260,7 @@ export const DeliveryPage: React.FC<DeliveryPageProps> = ({
         status: 'shipped',
         customer: customerName,
         shippingAddress: shippingAddress,
+        deliveryDate: deliveryDate,
         items: [...deliveryItems],
         total_products: deliveryItems.length,
         total_units: totalUnits,
@@ -298,11 +300,6 @@ export const DeliveryPage: React.FC<DeliveryPageProps> = ({
     setIsSuccessModalOpen(false);
   };
 
-  const todayFormatted = new Date().toLocaleDateString('en-US', {
-    month: 'short',
-    day: 'numeric',
-    year: 'numeric',
-  });
 
   return (
     <div className="space-y-6">
@@ -379,9 +376,14 @@ export const DeliveryPage: React.FC<DeliveryPageProps> = ({
             <span className="text-[11px] font-semibold text-slate-400 uppercase tracking-wider block mb-1">
               Dispatch Date
             </span>
-            <div className="text-sm font-bold text-white flex items-center gap-2">
-              <Calendar className="w-4 h-4 text-blue-400" />
-              {todayFormatted}
+            <div className="flex items-center gap-1.5">
+              <Calendar className="w-4 h-4 text-blue-400 flex-shrink-0" />
+              <input
+                type="date"
+                value={deliveryDate}
+                onChange={(e) => setDeliveryDate(e.target.value)}
+                className="w-full bg-transparent text-xs font-bold text-slate-200 focus:outline-none focus:text-white border-b border-slate-700 focus:border-blue-500 py-0.5 cursor-pointer [color-scheme:dark]"
+              />
             </div>
           </div>
 
@@ -420,6 +422,23 @@ export const DeliveryPage: React.FC<DeliveryPageProps> = ({
                 className="w-full bg-transparent text-xs font-bold text-slate-200 focus:outline-none focus:text-white border-b border-slate-700 focus:border-blue-500 py-0.5"
               />
             </div>
+          </div>
+        </div>
+
+        {/* Shipping Address (full width row below the 4 cards) */}
+        <div className="mt-4 p-4 rounded-2xl bg-slate-800/50 border border-slate-700/60">
+          <span className="text-[11px] font-semibold text-slate-400 uppercase tracking-wider block mb-1">
+            Shipping Address
+          </span>
+          <div className="flex items-center gap-1.5">
+            <MapPin className="w-4 h-4 text-blue-400 flex-shrink-0" />
+            <input
+              type="text"
+              value={shippingAddress}
+              onChange={(e) => setShippingAddress(e.target.value)}
+              placeholder="e.g. Bay 4, 100 Industrial Parkway, Chicago IL 60601"
+              className="w-full bg-transparent text-xs font-bold text-slate-200 focus:outline-none focus:text-white border-b border-slate-700 focus:border-blue-500 py-0.5"
+            />
           </div>
         </div>
       </section>

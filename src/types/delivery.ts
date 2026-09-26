@@ -14,6 +14,7 @@ export interface DeliverySummaryData {
   status: 'draft' | 'shipped' | 'cancelled';
   customer?: string;
   shippingAddress?: string;
+  deliveryDate?: string;
   items: DeliveryItem[];
   total_products: number;
   total_units: number;

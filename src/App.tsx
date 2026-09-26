@@ -15,7 +15,8 @@ import {
   Bell,
   Printer,
   FileDown,
-  ArrowRight
+  ArrowRight,
+  Plus
 } from 'lucide-react';
 import confetti from 'canvas-confetti';
 import { Product, ScanRecord } from './types/inventory';
@@ -30,6 +31,7 @@ import { StockAlertTestPanel } from './components/StockAlertTestPanel';
 import { ReceiptPage } from './components/receipt/ReceiptPage';
 import { DeliveryPage } from './components/delivery/DeliveryPage';
 import { PrintableQRModal } from './components/PrintableQRModal';
+import { AddProductModal } from './components/AddProductModal';
 import { AlertProvider, useAlerts } from './context/AlertContext';
 import { playScannerBeep } from './utils/audio';
 
@@ -38,6 +40,7 @@ const UnifiedDashboardContent: React.FC = () => {
   const [products, setProducts] = useState<Product[]>(MOCK_PRODUCTS);
   const [isScannerOpen, setIsScannerOpen] = useState<boolean>(false);
   const [isQRDocModalOpen, setIsQRDocModalOpen] = useState<boolean>(false);
+  const [isAddProductModalOpen, setIsAddProductModalOpen] = useState<boolean>(false);
   const [activeScannedProduct, setActiveScannedProduct] = useState<Product | null>(null);
   const [scanHistory, setScanHistory] = useState<ScanRecord[]>([]);
 
@@ -139,6 +142,17 @@ const UnifiedDashboardContent: React.FC = () => {
     setProducts(MOCK_PRODUCTS);
     setActiveScannedProduct(null);
     setScanHistory([]);
+  };
+
+  // Add a new product to the live inventory
+  const handleAddProduct = (newProduct: Product) => {
+    setProducts((prev) => [...prev, newProduct]);
+    addAlert({
+      type: 'info',
+      title: `Item Added: ${newProduct.name}`,
+      message: `${newProduct.name} (${newProduct.sku}) has been registered with ${newProduct.current_stock} units. QR code generated.`,
+      productName: newProduct.name,
+    });
   };
 
   return (
@@ -306,7 +320,7 @@ const UnifiedDashboardContent: React.FC = () => {
               <div className="flex items-center gap-2">
                 <span className="w-3 h-3 rounded-full bg-purple-500 shadow-[0_0_8px_#a855f7]" />
                 <h3 className="text-xs font-bold uppercase tracking-widest text-purple-400">
-                  Workflow 1: Vendor Inbound Processing
+                  Vendor Inbound Processing
                 </h3>
               </div>
             </div>
@@ -324,7 +338,7 @@ const UnifiedDashboardContent: React.FC = () => {
               <div className="flex items-center gap-2">
                 <span className="w-3 h-3 rounded-full bg-blue-500 shadow-[0_0_8px_#3b82f6]" />
                 <h3 className="text-xs font-bold uppercase tracking-widest text-blue-400">
-                  Workflow 2: Customer Outbound Dispatch &amp; Stock Verification
+                  Customer Outbound Dispatch &amp; Stock Verification
                 </h3>
               </div>
             </div>
@@ -344,14 +358,24 @@ const UnifiedDashboardContent: React.FC = () => {
                 Live Warehouse Physical Inventory
               </h3>
             </div>
-            <button
-              type="button"
-              onClick={() => setIsQRDocModalOpen(true)}
-              className="text-xs text-purple-400 hover:text-purple-300 font-bold flex items-center gap-1 cursor-pointer"
-            >
-              <Printer className="w-3.5 h-3.5" />
-              <span>Print All 4 QR Codes</span>
-            </button>
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => setIsAddProductModalOpen(true)}
+                className="px-3 py-1.5 rounded-xl bg-emerald-600/20 hover:bg-emerald-600/35 border border-emerald-500/40 text-emerald-300 hover:text-white text-xs font-bold flex items-center gap-1.5 transition-all cursor-pointer hover:scale-105 active:scale-95"
+              >
+                <Plus className="w-3.5 h-3.5" />
+                <span>Add Item</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setIsQRDocModalOpen(true)}
+                className="text-xs text-purple-400 hover:text-purple-300 font-bold flex items-center gap-1 cursor-pointer"
+              >
+                <Printer className="w-3.5 h-3.5" />
+                <span>Print All QR Codes</span>
+              </button>
+            </div>
           </div>
 
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
@@ -504,6 +528,14 @@ const UnifiedDashboardContent: React.FC = () => {
         isOpen={isQRDocModalOpen}
         onClose={() => setIsQRDocModalOpen(false)}
         products={products}
+      />
+
+      {/* ADD NEW PRODUCT MODAL */}
+      <AddProductModal
+        isOpen={isAddProductModalOpen}
+        onClose={() => setIsAddProductModalOpen(false)}
+        onAddProduct={handleAddProduct}
+        existingProductsCount={products.length}
       />
     </div>
   );
