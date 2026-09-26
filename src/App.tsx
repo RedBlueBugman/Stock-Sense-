@@ -9,11 +9,13 @@ import {
   QrCode, 
   Activity, 
   FilePlus, 
+  Truck,
   LayoutDashboard,
   CheckCircle2,
   Bell,
   Printer,
-  FileDown
+  FileDown,
+  ArrowRight
 } from 'lucide-react';
 import confetti from 'canvas-confetti';
 import { Product, ScanRecord } from './types/inventory';
@@ -26,19 +28,18 @@ import { AlertBell } from './components/AlertBell';
 import { AlertToastContainer } from './components/AlertToastContainer';
 import { StockAlertTestPanel } from './components/StockAlertTestPanel';
 import { ReceiptPage } from './components/receipt/ReceiptPage';
+import { DeliveryPage } from './components/delivery/DeliveryPage';
 import { PrintableQRModal } from './components/PrintableQRModal';
 import { AlertProvider, useAlerts } from './context/AlertContext';
 import { playScannerBeep } from './utils/audio';
 
 const UnifiedDashboardContent: React.FC = () => {
+  const [activeWorkflowTab, setActiveWorkflowTab] = useState<'receipt' | 'delivery' | 'all'>('all');
   const [products, setProducts] = useState<Product[]>(MOCK_PRODUCTS);
   const [isScannerOpen, setIsScannerOpen] = useState<boolean>(false);
   const [isQRDocModalOpen, setIsQRDocModalOpen] = useState<boolean>(false);
   const [activeScannedProduct, setActiveScannedProduct] = useState<Product | null>(null);
   const [scanHistory, setScanHistory] = useState<ScanRecord[]>([]);
-
-  const inventorySectionRef = useRef<HTMLDivElement>(null);
-  const receiptSectionRef = useRef<HTMLDivElement>(null);
 
   const { checkProductStockAlert, addAlert } = useAlerts();
 
@@ -86,7 +87,7 @@ const UnifiedDashboardContent: React.FC = () => {
         spread: 60,
         origin: { y: 0.8 },
         zIndex: 99999,
-        colors: ['#8B5CF6', '#10B981', '#60A5FA', '#F59E0B'],
+        colors: ['#8B5CF6', '#3B82F6', '#10B981', '#F59E0B'],
       });
     } catch {
       // safe fallback
@@ -148,23 +149,67 @@ const UnifiedDashboardContent: React.FC = () => {
       {/* Top Warehouse Navigation Bar */}
       <header className="sticky top-0 z-40 border-b border-slate-800/80 bg-slate-950/90 backdrop-blur-xl">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-xl bg-gradient-to-tr from-purple-600 to-indigo-500 p-0.5 shadow-[0_0_20px_rgba(139,92,246,0.6)]">
-              <div className="w-full h-full bg-slate-950 rounded-[10px] flex items-center justify-center text-purple-400">
-                <Scan className="w-5 h-5 text-purple-400" />
+          <div className="flex items-center gap-4">
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-xl bg-gradient-to-tr from-purple-600 to-blue-500 p-0.5 shadow-[0_0_20px_rgba(139,92,246,0.6)]">
+                <div className="w-full h-full bg-slate-950 rounded-[10px] flex items-center justify-center text-purple-400">
+                  <Scan className="w-5 h-5 text-purple-400" />
+                </div>
+              </div>
+              <div>
+                <div className="flex items-center gap-2">
+                  <h1 className="text-lg font-black tracking-tight text-white flex items-center gap-1.5">
+                    Stock<span className="text-purple-400">Sense</span>
+                  </h1>
+                  <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-purple-500/15 text-purple-300 border border-purple-500/30">
+                    COMPLETE SUITE
+                  </span>
+                </div>
+                <p className="text-[11px] text-slate-400 hidden sm:block">Receipts • Deliveries • Optical Scanner • Alert Gateway</p>
               </div>
             </div>
-            <div>
-              <div className="flex items-center gap-2">
-                <h1 className="text-lg font-black tracking-tight text-white flex items-center gap-1.5">
-                  Stock<span className="text-purple-400">Sense</span>
-                </h1>
-                <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-purple-500/15 text-purple-300 border border-purple-500/30">
-                  LIVE WEBCAM &amp; QR READY
-                </span>
-              </div>
-              <p className="text-[11px] text-slate-400 hidden sm:block">Live Optical Camera Scanner • Inbound Receipts • Alert Gateway</p>
-            </div>
+
+            {/* Workflow Navigation Tabs */}
+            <nav className="hidden lg:flex items-center bg-slate-900/90 border border-slate-800 rounded-xl p-1 ml-4 text-xs font-bold">
+              <button
+                type="button"
+                onClick={() => setActiveWorkflowTab('all')}
+                className={`px-3 py-1.5 rounded-lg transition-all flex items-center gap-1.5 cursor-pointer ${
+                  activeWorkflowTab === 'all'
+                    ? 'bg-slate-700 text-white shadow'
+                    : 'text-slate-400 hover:text-white'
+                }`}
+              >
+                <LayoutDashboard className="w-3.5 h-3.5" />
+                <span>All Workflows (Unified)</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setActiveWorkflowTab('receipt')}
+                className={`px-3 py-1.5 rounded-lg transition-all flex items-center gap-1.5 cursor-pointer ${
+                  activeWorkflowTab === 'receipt'
+                    ? 'bg-purple-600 text-white shadow'
+                    : 'text-slate-400 hover:text-purple-300'
+                }`}
+              >
+                <FilePlus className="w-3.5 h-3.5 text-purple-300" />
+                <span>Inbound Receipts</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setActiveWorkflowTab('delivery')}
+                className={`px-3 py-1.5 rounded-lg transition-all flex items-center gap-1.5 cursor-pointer ${
+                  activeWorkflowTab === 'delivery'
+                    ? 'bg-blue-600 text-white shadow'
+                    : 'text-slate-400 hover:text-blue-300'
+                }`}
+              >
+                <Truck className="w-3.5 h-3.5 text-blue-300" />
+                <span>Outgoing Deliveries</span>
+              </button>
+            </nav>
           </div>
 
           {/* Top Actions & QR Sheet */}
@@ -213,9 +258,40 @@ const UnifiedDashboardContent: React.FC = () => {
             </button>
           </div>
         </div>
+
+        {/* Mobile Workflow Filter Tabs */}
+        <div className="flex lg:hidden border-t border-slate-800 bg-slate-950 px-4 py-2 gap-2 text-xs font-bold">
+          <button
+            type="button"
+            onClick={() => setActiveWorkflowTab('all')}
+            className={`flex-1 py-1.5 rounded-lg text-center ${
+              activeWorkflowTab === 'all' ? 'bg-slate-700 text-white' : 'text-slate-400 bg-slate-900'
+            }`}
+          >
+            All Unified
+          </button>
+          <button
+            type="button"
+            onClick={() => setActiveWorkflowTab('receipt')}
+            className={`flex-1 py-1.5 rounded-lg text-center ${
+              activeWorkflowTab === 'receipt' ? 'bg-purple-600 text-white' : 'text-slate-400 bg-slate-900'
+            }`}
+          >
+            📦 Inbound
+          </button>
+          <button
+            type="button"
+            onClick={() => setActiveWorkflowTab('delivery')}
+            className={`flex-1 py-1.5 rounded-lg text-center ${
+              activeWorkflowTab === 'delivery' ? 'bg-blue-600 text-white' : 'text-slate-400 bg-slate-900'
+            }`}
+          >
+            🚚 Outbound
+          </button>
+        </div>
       </header>
 
-      {/* Main Unified Content */}
+      {/* Main Content */}
       <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 pt-8 space-y-12 flex-1 w-full">
         
         {/* TOP KPI OVERVIEW */}
@@ -223,15 +299,43 @@ const UnifiedDashboardContent: React.FC = () => {
           <InventoryStats products={products} scanRecords={scanHistory} />
         </section>
 
-        {/* WORKFLOW 1: INBOUND RECEIPT CREATION */}
-        <section ref={receiptSectionRef} className="space-y-4">
-          <ReceiptPage
-            products={products}
-            onUpdateProducts={(updated) => setProducts(updated)}
-          />
-        </section>
+        {/* WORKFLOW 1: INBOUND RECEIPT CREATION (PURPLE THEME) */}
+        {(activeWorkflowTab === 'all' || activeWorkflowTab === 'receipt') && (
+          <section className="space-y-4">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <span className="w-3 h-3 rounded-full bg-purple-500 shadow-[0_0_8px_#a855f7]" />
+                <h3 className="text-xs font-bold uppercase tracking-widest text-purple-400">
+                  Workflow 1: Vendor Inbound Processing
+                </h3>
+              </div>
+            </div>
+            <ReceiptPage
+              products={products}
+              onUpdateProducts={(updated) => setProducts(updated)}
+            />
+          </section>
+        )}
 
-        {/* WORKFLOW 2: LIVE WAREHOUSE CATALOG & STOCK OPERATIONS */}
+        {/* WORKFLOW 2: OUTGOING DELIVERY CREATION (BLUE THEME WITH STRICT STOCK VALIDATION) */}
+        {(activeWorkflowTab === 'all' || activeWorkflowTab === 'delivery') && (
+          <section className="space-y-4 pt-4 border-t border-slate-800">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <span className="w-3 h-3 rounded-full bg-blue-500 shadow-[0_0_8px_#3b82f6]" />
+                <h3 className="text-xs font-bold uppercase tracking-widest text-blue-400">
+                  Workflow 2: Customer Outbound Dispatch &amp; Stock Verification
+                </h3>
+              </div>
+            </div>
+            <DeliveryPage
+              products={products}
+              onUpdateProducts={(updated) => setProducts(updated)}
+            />
+          </section>
+        )}
+
+        {/* WORKFLOW 3: LIVE WAREHOUSE CATALOG & STOCK OPERATIONS */}
         <section className="space-y-4 pt-4 border-t border-slate-800">
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-2">
@@ -316,8 +420,8 @@ const UnifiedDashboardContent: React.FC = () => {
           </div>
         </section>
 
-        {/* WORKFLOW 3: SCANNED PRODUCT INSPECTION */}
-        <section ref={inventorySectionRef} className="space-y-4">
+        {/* WORKFLOW 4: SCANNED PRODUCT INSPECTION */}
+        <section className="space-y-4">
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-2">
               <Package className="w-5 h-5 text-purple-400" />
@@ -352,13 +456,13 @@ const UnifiedDashboardContent: React.FC = () => {
                 className="mt-4 px-4 py-2 rounded-xl bg-purple-600/30 hover:bg-purple-600/50 border border-purple-500/50 text-purple-200 text-xs font-bold transition-all flex items-center gap-2 cursor-pointer shadow-md"
               >
                 <Scan className="w-4 h-4" />
-                Launch Live Camera Viewfinder
+                Launch Optical Viewfinder
               </button>
             </div>
           )}
         </section>
 
-        {/* WORKFLOW 4: AUTOMATED THRESHOLD AUDIT & ALERT GENERATOR */}
+        {/* WORKFLOW 5: AUTOMATED THRESHOLD AUDIT & ALERT GENERATOR */}
         <section className="space-y-4">
           <StockAlertTestPanel
             products={products}
@@ -366,7 +470,7 @@ const UnifiedDashboardContent: React.FC = () => {
           />
         </section>
 
-        {/* WORKFLOW 5: LIVE SCAN AUDIT EVENT STREAM */}
+        {/* WORKFLOW 6: LIVE SCAN AUDIT EVENT STREAM */}
         <section className="space-y-4">
           <RecentScansTable
             records={scanHistory}
@@ -381,9 +485,9 @@ const UnifiedDashboardContent: React.FC = () => {
         <div className="max-w-7xl mx-auto px-4 flex flex-col sm:flex-row items-center justify-between gap-3">
           <div className="flex items-center gap-2">
             <span className="w-2 h-2 rounded-full bg-emerald-400" />
-            <span>StockSense Warehouse Systems • Live Webcam Optical Scanner &amp; Inbound Receipt Gateway</span>
+            <span>StockSense Warehouse Systems • Inbound Receipts, Outbound Deliveries &amp; Alert Gateway</span>
           </div>
-          <p className="text-[11px] text-slate-600">Equipped with jsQR Real-Time Video Frame Decoder &amp; Web Audio Synthesis</p>
+          <p className="text-[11px] text-slate-600">Built for Odoo Hackathon Demo • React, Tailwind CSS, Framer Motion &amp; Web Audio API</p>
         </div>
       </footer>
 
