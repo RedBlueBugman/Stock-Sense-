@@ -1,0 +1,20 @@
+CREATE TABLE IF NOT EXISTS public.products (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    name VARCHAR(200) NOT NULL,
+    sku VARCHAR(100) NOT NULL UNIQUE,
+    barcode VARCHAR(100) UNIQUE,
+    category_id UUID REFERENCES public.product_categories(id) ON DELETE SET NULL,
+    unit_of_measure VARCHAR(30) NOT NULL DEFAULT 'unit',
+    tracking_type public.tracking_type NOT NULL DEFAULT 'none',
+    image_url TEXT,
+    reorder_min DECIMAL(15,4) NOT NULL DEFAULT 0,
+    reorder_max DECIMAL(15,4) NOT NULL DEFAULT 0,
+    reorder_qty DECIMAL(15,4) NOT NULL DEFAULT 0,
+    is_active BOOLEAN NOT NULL DEFAULT TRUE,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    CONSTRAINT products_name_chk CHECK (length(trim(name)) > 0),
+    CONSTRAINT products_reorder_min_chk CHECK (reorder_min >= 0),
+    CONSTRAINT products_reorder_max_chk CHECK (reorder_max >= reorder_min),
+    CONSTRAINT products_reorder_qty_chk CHECK (reorder_qty >= 0)
+);

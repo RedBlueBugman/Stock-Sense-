@@ -1,0 +1,31 @@
+services:
+  postgres:
+    image: postgres:16
+    container_name: stocksense-postgres
+    restart: unless-stopped
+    command:
+      - postgres
+      - -c
+      - shared_preload_libraries=pg_stat_statements
+      - -c
+      - log_min_duration_statement=500
+      - -c
+      - timezone=UTC
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-stocksense}
+      POSTGRES_USER: ${POSTGRES_USER:-stocksense}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-stocksense_dev}
+      TZ: ${TZ:-UTC}
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - stocksense_pgdata:/var/lib/postgresql/data
+      - ./initdb:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-stocksense} -d ${POSTGRES_DB:-stocksense}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  stocksense_pgdata:
