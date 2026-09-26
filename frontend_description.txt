@@ -1,0 +1,937 @@
+================================================================================
+STOCKSENSE — COMPLETE FRONTEND SPECIFICATION
+BUILD THIS IN PARALLEL WITH BACKEND
+================================================================================
+
+TECH STACK (LOCKED):
+- Framework: Next.js 14 (App Router) + TypeScript
+- Styling: Tailwind CSS + shadcn/ui components
+- Data Fetching: TanStack Query (React Query) v5
+- Client State: Zustand
+- Forms: React Hook Form + Zod validation
+- Charts: Recharts (lightweight, no heavy deps)
+- Tables: TanStack Table v8
+- Icons: Lucide React
+- Toasts: sonner
+- HTTP Client: Axios (interceptors for JWT + error handling)
+- Date Handling: date-fns
+
+================================================================================
+PROJECT STRUCTURE
+================================================================================
+
+/frontend
+  /src
+    /app
+      /login                  → Login page
+      /signup                 → Signup page
+      /reset-password         → OTP reset flow
+      /layout.tsx             → Root layout (auth check, providers)
+      /page.tsx               → Redirect to /dashboard
+      /(dashboard)
+        /layout.tsx           → Dashboard shell (sidebar + topbar)
+        /dashboard/page.tsx   → KPI dashboard (landing page)
+        /products
+          /page.tsx           → Products list
+          /[id]/page.tsx      → Product detail
+          /new/page.tsx       → Create product
+        /operations
+          /page.tsx           → Operations list (all types, tabbed)
+          /receipts/page.tsx  → Receipts filtered view
+          /deliveries/page.tsx→ Deliveries filtered view
+          /transfers/page.tsx → Transfers filtered view
+          /adjustments/page.tsx→ Adjustments filtered view
+          /[id]/page.tsx      → Operation detail
+          /new/page.tsx       → Create operation (multi-step wizard)
+        /move-history/page.tsx→ Full ledger move history
+        /warehouses/page.tsx  → Warehouse & location management
+        /settings/page.tsx    → System settings
+        /profile/page.tsx     → User profile
+    /components
+      /ui                     → shadcn/ui primitives (button, card, dialog, etc.)
+      /layout
+        /Sidebar.tsx          → Left navigation sidebar
+        /TopBar.tsx           → Top bar (search, notifications, avatar)
+        /DashboardShell.tsx   → Wraps sidebar + topbar + content
+      /dashboard
+        /KPICard.tsx          → Single KPI metric card
+        /KPIGrid.tsx          → Grid of 5 KPI cards
+        /MovementChart.tsx    → Line chart (30-day stock movement trend)
+        /RecentOperations.tsx → Table of last 10 operations
+        /DashboardFilters.tsx → Filter bar (type, status, warehouse, date)
+      /products
+        /ProductTable.tsx     → Data grid (TanStack Table)
+        /ProductForm.tsx      → Create/edit form (React Hook Form + Zod)
+        /ProductCard.tsx      → Product summary card (for detail page)
+        /StockByLocation.tsx  → Table showing stock per location
+        /CategoryTree.tsx     → Category dropdown/tree selector
+      /operations
+        /OperationTable.tsx   → Operations data grid with status badges
+        /OperationWizard.tsx  → Multi-step create form (3 steps)
+        /OperationTimeline.tsx→ Status timeline visualization
+        /OperationMoves.tsx   → Moves table within operation detail
+        /StatusBadge.tsx      → Color-coded status pill
+        /ValidateButton.tsx   → State transition button (role-gated)
+      /move-history
+        /MoveHistoryTable.tsx → Full ledger view with filters
+        /MoveDetailModal.tsx  → Click a move to see full details
+      /warehouses
+        /WarehouseList.tsx    → Warehouse cards
+        /LocationTree.tsx     → Hierarchical location tree
+        /LocationForm.tsx     → Create/edit location
+      /shared
+        /DataTable.tsx        → Reusable TanStack Table wrapper
+        /SearchInput.tsx      → Debounced search input
+        /FilterBar.tsx        → Reusable filter dropdowns
+        /EmptyState.tsx       → "No data" illustration + CTA
+        /LoadingSkeleton.tsx  → Skeleton loaders
+        /ErrorState.tsx       → Error display + retry button
+        /ConfirmDialog.tsx    → "Are you sure?" modal
+        /PageHeader.tsx       → Page title + action buttons
+    /lib
+      /axios.ts               → Axios instance with interceptors
+      /queryClient.ts         → TanStack Query client config
+      /utils.ts               → cn(), formatDate(), formatNumber()
+    /hooks
+      /useAuth.ts             → Auth state + login/logout/signup
+      /useProducts.ts         → Product queries + mutations
+      /useOperations.ts       → Operation queries + mutations
+      /useDashboard.ts        → Dashboard KPI queries
+      /useWarehouses.ts       → Warehouse/location queries
+      /useStock.ts            → Stock quantity queries
+    /stores
+      /authStore.ts           → Zustand: user, tokens, role
+      /uiStore.ts             → Zustand: sidebar open, theme, filters
+    /types
+      /api.ts                 → All TypeScript interfaces matching backend
+    /constants
+      /routes.ts              → Route paths
+      /roles.ts               → Role hierarchy
+      /statuses.ts            → Operation statuses + colors
+
+================================================================================
+API INTEGRATION MAP — WHO OWNS WHAT ENDPOINT
+================================================================================
+
+MEMBER 2 (YOU — Backend Core) owns these endpoints. Frontend calls them:
+
+  AUTH:
+    POST   /api/v1/auth/signup          → Signup page
+    POST   /api/v1/auth/login           → Login page
+    POST   /api/v1/auth/refresh         → Axios interceptor (auto-refresh)
+    POST   /api/v1/auth/logout          → TopBar logout button
+    POST   /api/v1/auth/forgot-password → Reset password page (step 1)
+    POST   /api/v1/auth/verify-otp      → Reset password page (step 2)
+    POST   /api/v1/auth/reset-password  → Reset password page (step 3)
+
+  LEDGER / OPERATIONS:
+    POST   /api/v1/operations           → Create operation wizard (step 3 confirm)
+    PATCH  /api/v1/operations/:id/transition → ValidateButton component
+    GET    /api/v1/operations           → Operations list pages (all tabs)
+    GET    /api/v1/operations/:id       → Operation detail page
+
+  STOCK:
+    GET    /api/v1/stock/quants         → Product detail (stock by location tab)
+    GET    /api/v1/stock/quants/:id/history → Move history page
+    GET    /api/v1/stock/moves          → Move history page (full ledger)
+
+MEMBER 3 (APIs) owns these endpoints. Frontend calls them:
+
+  PRODUCTS:
+    GET    /api/v1/products             → Products list page
+    GET    /api/v1/products/:id         → Product detail page
+    POST   /api/v1/products             → Create product page
+    PATCH  /api/v1/products/:id         → Edit product (inline on detail)
+    DELETE /api/v1/products/:id         → Delete button on product detail
+
+  CATEGORIES:
+    GET    /api/v1/categories           → CategoryTree component (used in forms)
+    POST   /api/v1/categories           → Settings page (category management)
+
+  WAREHOUSES & LOCATIONS:
+    GET    /api/v1/warehouses           → Warehouses page + all filter dropdowns
+    POST   /api/v1/warehouses           → Create warehouse (settings)
+    GET    /api/v1/locations            → LocationTree component
+    POST   /api/v1/locations            → Create location
+    PATCH  /api/v1/locations/:id        → Edit location
+
+  PARTNERS:
+    GET    /api/v1/partners             → Partner dropdown in operation wizard
+    POST   /api/v1/partners             → Quick-create partner in wizard
+
+  DASHBOARD:
+    GET    /api/v1/dashboard/kpis       → KPIGrid component
+    GET    /api/v1/dashboard/recent-operations → RecentOperations component
+    GET    /api/v1/dashboard/low-stock  → Dashboard low stock section
+    GET    /api/v1/dashboard/movement-trend → MovementChart component
+
+  PROFILE & SETTINGS:
+    GET    /api/v1/profile              → Profile page
+    PATCH  /api/v1/profile              → Edit profile form
+    POST   /api/v1/profile/change-password → Change password form
+    GET    /api/v1/settings             → Settings page
+    PATCH  /api/v1/settings             → Update settings
+
+  SEARCH:
+    GET    /api/v1/search?q=            → TopBar global search
+
+MEMBER 4 (Features) owns these. Frontend receives from them:
+
+  BARCODE SCANNER:
+    <BarcodeScanner /> component → Drop into mobile scan screen
+    Props: onScan(barcode), onScanError(), isActive
+    YOU build the scan screen shell, THEY wire the camera logic
+
+  SYNC STATUS:
+    useSyncStatus() hook → Returns { isOnline, pendingCount, lastSyncAt }
+    YOU display it in profile page and topbar, THEY provide the state
+
+  NOTIFICATIONS:
+    WebSocket connection → THEY set up the WS server
+    YOU build the notification bell in TopBar that listens to WS events
+    Channel: user:{id}:notifications → badge count + dropdown list
+
+  ALERTS:
+    GET /api/v1/alerts → THEY build this endpoint
+    YOU display alerts in dashboard and notification dropdown
+
+================================================================================
+TYPE DEFINITIONS (src/types/api.ts)
+================================================================================
+
+// These MUST match backend response shapes exactly.
+// Agree on these with Member 2 and Member 3 in Week 1.
+
+interface User {
+  id: string;
+  name: string;
+  email: string;
+  phone: string;
+  role: 'ADMIN' | 'INVENTORY_MANAGER' | 'WAREHOUSE_SUPERVISOR' | 'WAREHOUSE_WORKER' | 'VIEWER';
+  assignedWarehouses: Warehouse[];
+  isActive: boolean;
+  createdAt: string;
+}
+
+interface Warehouse {
+  id: string;
+  name: string;
+  code: string;
+  address: string;
+  isActive: boolean;
+}
+
+interface Location {
+  id: string;
+  warehouseId: string;
+  parentLocationId: string | null;
+  name: string;
+  barcode: string | null;
+  locationType: 'internal' | 'vendor' | 'customer' | 'loss' | 'production';
+  isActive: boolean;
+  children?: Location[];
+}
+
+interface ProductCategory {
+  id: string;
+  name: string;
+  parentCategoryId: string | null;
+  productCount?: number;
+}
+
+interface Product {
+  id: string;
+  name: string;
+  sku: string;
+  barcode: string | null;
+  category: ProductCategory;
+  unitOfMeasure: string;
+  trackingType: 'none' | 'lot' | 'serial';
+  imageUrl: string | null;
+  reorderMin: number;
+  reorderMax: number;
+  reorderQty: number;
+  isActive: boolean;
+  stockQty?: number;        // computed by backend from view_stock_quants
+  stockStatus?: 'in_stock' | 'low' | 'out'; // computed
+  createdAt: string;
+}
+
+interface Partner {
+  id: string;
+  name: string;
+  type: 'supplier' | 'customer' | 'both';
+  email: string;
+  phone: string;
+  address: string;
+}
+
+interface StockOperation {
+  id: string;
+  referenceCode: string;
+  operationType: 'receipt' | 'delivery' | 'internal' | 'adjustment';
+  status: 'draft' | 'waiting' | 'ready' | 'done' | 'cancelled';
+  sourceLocation: Location;
+  destinationLocation: Location;
+  partner: Partner | null;
+  scheduledDate: string;
+  completedDate: string | null;
+  assignedTo: User | null;
+  approvedBy: User | null;
+  notes: string;
+  moves: StockMove[];
+  createdAt: string;
+  updatedAt: string;
+}
+
+interface StockMove {
+  id: string;
+  operationId: string;
+  product: Product;
+  lotId: string | null;
+  quantity: number;
+  unitOfMeasure: string;
+  sourceLocation: Location;
+  destinationLocation: Location;
+  status: 'draft' | 'reserved' | 'done' | 'cancelled';
+  createdAt: string;
+}
+
+interface StockQuant {
+  productId: string;
+  locationId: string;
+  qtyOnHand: number;
+  qtyReserved: number;
+  qtyAvailable: number;
+}
+
+interface DashboardKPIs {
+  totalProducts: number;
+  lowStockCount: number;
+  outOfStockCount: number;
+  pendingReceipts: number;
+  pendingDeliveries: number;
+  scheduledTransfers: number;
+  todayMovements: number;
+}
+
+interface MovementTrend {
+  date: string;
+  receipts: number;
+  deliveries: number;
+  transfers: number;
+  adjustments: number;
+}
+
+interface Alert {
+  id: string;
+  type: 'low_stock' | 'out_of_stock' | 'expiry_warning' | 'reorder_triggered';
+  productId: string | null;
+  productName: string | null;
+  warehouseId: string | null;
+  message: string;
+  priority: 'low' | 'medium' | 'high' | 'critical';
+  isRead: boolean;
+  createdAt: string;
+}
+
+interface PaginatedResponse<T> {
+  data: T[];
+  meta: {
+    total: number;
+    page: number;
+    limit: number;
+    totalPages: number;
+  };
+}
+
+interface ApiError {
+  error: {
+    code: string;
+    message: string;
+    details?: any;
+  };
+}
+
+================================================================================
+AXIOS SETUP (src/lib/axios.ts)
+================================================================================
+
+Create a single Axios instance with:
+
+1. baseURL: 'http://localhost:5000/api/v1'
+2. Request interceptor:
+   - Read access token from authStore (Zustand)
+   - Attach as Authorization: Bearer <token> header
+3. Response interceptor (401 handling):
+   - If response is 401 and NOT a refresh request:
+     a. Call POST /auth/refresh with refresh token
+     b. If refresh succeeds → retry original request with new token
+     c. If refresh fails → clear auth store → redirect to /login
+   - If response is 403 → show toast "Insufficient permissions"
+   - If response is 409 → show toast with conflict message
+   - If response is 500 → show toast "Server error, try again"
+4. All error toasts use sonner library
+
+================================================================================
+TANSTACK QUERY CONFIG (src/lib/queryClient.ts)
+================================================================================
+
+Default options:
+  staleTime: 30_000 (30 seconds — data considered fresh)
+  gcTime: 5 * 60_000 (5 minutes — cache garbage collection)
+  retry: 2
+  refetchOnWindowFocus: true
+  refetchOnReconnect: true
+
+Query keys convention:
+  ['products', { page, search, category }]
+  ['products', productId]
+  ['operations', { type, status, page }]
+  ['operations', operationId]
+  ['stock', 'quants', { productId, locationId }]
+  ['stock', 'moves', { productId, dateFrom, dateTo }]
+  ['dashboard', 'kpis', { warehouseId }]
+  ['dashboard', 'trend', { days }]
+  ['dashboard', 'low-stock']
+  ['warehouses']
+  ['locations', { warehouseId }]
+  ['categories']
+  ['partners', { type }]
+  ['profile']
+  ['alerts', { unread: true }]
+
+================================================================================
+ZUSTAND STORES
+================================================================================
+
+authStore (src/stores/authStore.ts):
+  State:
+    user: User | null
+    accessToken: string | null
+    refreshToken: string | null
+    isAuthenticated: boolean
+  Actions:
+    login(email, password) → calls POST /auth/login → stores tokens + user
+    signup(data) → calls POST /auth/signup → stores tokens + user
+    logout() → calls POST /auth/logout → clears everything → redirect /login
+    setUser(user) → update user profile after edit
+    hasRole(minRole) → boolean check against role hierarchy
+
+uiStore (src/stores/uiStore.ts):
+  State:
+    sidebarOpen: boolean (default true, false on mobile)
+    activeFilters: { type, status, warehouse, category, dateFrom, dateTo }
+    theme: 'light' | 'dark'
+  Actions:
+    toggleSidebar()
+    setFilter(key, value)
+    resetFilters()
+    setTheme(theme)
+
+================================================================================
+PAGE-BY-PAGE SPECIFICATION
+================================================================================
+
+PAGE 1: LOGIN (/login)
+----------------------
+Layout: Centered card on gradient background. No sidebar.
+Fields: Email (email input), Password (password input with show/hide toggle)
+Buttons: "Sign In" (primary), "Forgot Password?" (link), "Create Account" (link)
+On submit:
+  1. Validate with Zod (email format, password min 6 chars)
+  2. Call authStore.login(email, password)
+  3. On success → redirect to /dashboard
+  4. On error → show toast with error message
+Loading: Button shows spinner during API call, disabled
+Edge case: If already authenticated (token exists) → redirect to /dashboard immediately
+
+PAGE 2: SIGNUP (/signup)
+------------------------
+Layout: Same as login.
+Fields: Full Name, Email, Phone, Password, Confirm Password, Role (dropdown)
+Role dropdown options: INVENTORY_MANAGER, WAREHOUSE_WORKER (only these two for self-signup)
+On submit:
+  1. Validate (password match, strength, email format)
+  2. Call authStore.signup(data)
+  3. On success → redirect to /dashboard
+  4. On 409 → toast "Email already registered"
+
+PAGE 3: RESET PASSWORD (/reset-password)
+----------------------------------------
+Layout: Same as login. 3-step flow in one page.
+Step 1: Enter email → POST /auth/forgot-password → show "OTP sent" message
+Step 2: Enter 6-digit OTP → POST /auth/verify-otp → get reset token
+Step 3: Enter new password + confirm → POST /auth/reset-password → redirect to /login
+Timer: OTP expires in 10 minutes. Show countdown. "Resend OTP" button after 60s.
+
+PAGE 4: DASHBOARD (/(dashboard)/dashboard) — LANDING PAGE
+----------------------------------------------------------
+Layout: DashboardShell (sidebar + topbar + content area)
+
+Section 1 — KPI Cards (top row, 5 cards in a grid):
+  Card 1: "Total Products" — icon: Package — value from kpis.totalProducts
+  Card 2: "Low Stock" — icon: AlertTriangle (yellow) — value from kpis.lowStockCount
+  Card 3: "Out of Stock" — icon: XCircle (red) — value from kpis.outOfStockCount
+  Card 4: "Pending Receipts" — icon: ArrowDownToLine (green) — kpis.pendingReceipts
+  Card 5: "Pending Deliveries" — icon: ArrowUpFromLine (blue) — kpis.pendingDeliveries
+  Each card: clickable → navigates to filtered operations/products list
+  Data source: GET /api/v1/dashboard/kpis (Member 3)
+  Auto-refresh: every 30 seconds (TanStack Query refetchInterval)
+
+Section 2 — Charts (middle row, 2 columns):
+  Left: Movement Trend (line chart, last 30 days)
+    X-axis: dates, Y-axis: quantity
+    4 lines: Receipts (green), Deliveries (red), Transfers (blue), Adjustments (orange)
+    Data source: GET /api/v1/dashboard/movement-trend?days=30 (Member 3)
+  Right: Stock Status (donut chart)
+    Segments: In Stock (green), Low Stock (yellow), Out of Stock (red)
+    Data source: computed from kpis
+
+Section 3 — Recent Operations (bottom, full width):
+  Table columns: Reference Code, Type (badge), Status (badge), Partner, Items Count, Date
+  Last 10 operations, clickable rows → navigate to /operations/[id]
+  Data source: GET /api/v1/dashboard/recent-operations (Member 3)
+
+Section 4 — Low Stock Alerts (bottom right or below):
+  List of products below reorder threshold
+  Columns: Product Name, SKU, Current Stock, Reorder Min, Warehouse
+  Data source: GET /api/v1/dashboard/low-stock (Member 3)
+  "View All" link → /products?stock_status=low
+
+Filter Bar (above all sections):
+  Warehouse dropdown (all warehouses user has access to)
+  Date range picker (last 7d / 30d / 90d / custom)
+  Filters apply to all sections simultaneously
+
+PAGE 5: PRODUCTS LIST (/products)
+---------------------------------
+Layout: DashboardShell
+
+PageHeader: Title "Products", Button "Add Product" → /products/new
+
+Filter Bar:
+  Search input (debounced 300ms, searches name + SKU)
+  Category dropdown (from GET /api/v1/categories)
+  Stock Status dropdown: All / In Stock / Low / Out of Stock
+  Warehouse dropdown
+
+Data Grid (TanStack Table):
+  Columns:
+    - Image (thumbnail 40x40, fallback icon if no image)
+    - Product Name (bold) + SKU (gray, below name)
+    - Category (badge)
+    - UoM (text)
+    - Stock Qty (number, color-coded: green > min, yellow <= min, red = 0)
+    - Status (badge: In Stock / Low / Out)
+    - Actions (edit icon, delete icon)
+  Sorting: click column headers (name, sku, stock_qty, created_at)
+  Pagination: bottom of table, 20 per page
+  Row click → navigate to /products/[id]
+  Data source: GET /api/v1/products?search=X&category=Y&stock_status=Z&page=1&limit=20 (Member 3)
+
+Empty State: "No products yet. Create your first product to get started." + CTA button
+
+PAGE 6: PRODUCT DETAIL (/products/[id])
+---------------------------------------
+Layout: DashboardShell
+
+Header: Product name + SKU + Edit button + Delete button (role-gated)
+
+Tabs:
+  Tab 1 — Info:
+    Product image (large), Name, SKU, Barcode, Category, UoM, Tracking Type
+    Reorder Rules: Min, Max, Reorder Qty (editable inline for managers)
+    Created date, Last updated
+    Data source: GET /api/v1/products/:id (Member 3)
+
+  Tab 2 — Stock by Location:
+    Table: Location Name, Warehouse, Qty On Hand, Qty Reserved, Qty Available
+    Data source: GET /api/v1/stock/quants?product_id=X (Member 2)
+    Total row at bottom
+
+  Tab 3 — Move History:
+    Table: Date, Operation Ref, Type (badge), From → To, Qty, Status
+    Filterable by date range
+    Data source: GET /api/v1/stock/quants/:id/history (Member 2)
+
+  Tab 4 — Reorder Rules:
+    Form: Min Qty, Max Qty, Reorder Qty, Warehouse selector
+    Save button → PATCH /api/v1/products/:id (Member 3)
+    Only visible to INVENTORY_MANAGER+
+
+Edit Mode: Click "Edit" → fields become editable → Save/Cancel buttons
+Delete: Confirm dialog → DELETE /api/v1/products/:id → redirect to /products
+
+PAGE 7: CREATE PRODUCT (/products/new)
+--------------------------------------
+Layout: DashboardShell
+
+Form (React Hook Form + Zod):
+  Section 1 — Basic Info:
+    Product Name (required, min 2 chars)
+    SKU / Code (required, unique — backend validates)
+    Barcode (optional)
+    Category (tree dropdown from GET /api/v1/categories)
+    Unit of Measure (dropdown: pcs, kg, g, ton, liter, meter, box, pack)
+    Tracking Type (radio: None / Lot / Serial)
+
+  Section 2 — Stock (optional):
+    Initial Stock Quantity (number, default 0)
+    Warehouse (dropdown)
+    Location (dropdown, filtered by selected warehouse)
+    Note: If initial stock > 0, backend creates an adjustment operation automatically
+
+  Section 3 — Reordering:
+    Reorder Min (number)
+    Reorder Max (number)
+    Reorder Qty (number)
+
+  Section 4 — Image:
+    Drag-and-drop image upload area
+    Preview thumbnail
+    Uploads to presigned URL from Member 4's endpoint (or skip for hackathon, use URL input)
+
+Buttons: "Create Product" (primary), "Cancel" (ghost → back to /products)
+On submit:
+  1. Client-side Zod validation
+  2. POST /api/v1/products (Member 3)
+  3. On success → toast "Product created" → redirect to /products/[id]
+  4. On 409 → toast "SKU already exists"
+
+PAGE 8: OPERATIONS LIST (/operations and sub-routes)
+----------------------------------------------------
+Layout: DashboardShell
+
+Tabs at top: All | Receipts | Deliveries | Transfers | Adjustments
+Each tab filters by operation_type. "All" shows everything.
+
+PageHeader: Title based on active tab, Button "New Operation" → /operations/new
+
+Filter Bar:
+  Status dropdown: All / Draft / Waiting / Ready / Done / Cancelled
+  Warehouse dropdown
+  Date range picker
+  Search (reference code)
+
+Data Grid (TanStack Table):
+  Columns:
+    - Reference Code (monospace font, e.g., REC/2025/0042)
+    - Type (badge: Receipt=green, Delivery=blue, Transfer=purple, Adjustment=orange)
+    - Status (StatusBadge component with colors)
+    - Source → Destination (location names with arrow)
+    - Partner (name, or "—" for internal/adjustment)
+    - Items (count of moves)
+    - Scheduled Date
+    - Assigned To (worker name or "Unassigned")
+  Sorting: by date, status, type
+  Pagination: 20 per page
+  Row click → /operations/[id]
+  Data source: GET /api/v1/operations?type=X&status=Y&warehouse=Z (Member 2)
+
+StatusBadge colors:
+  draft → gray
+  waiting → yellow
+  ready → blue
+  done → green
+  cancelled → red (strikethrough text)
+
+PAGE 9: OPERATION DETAIL (/operations/[id])
+-------------------------------------------
+Layout: DashboardShell
+
+Header: Reference Code + StatusBadge + action buttons
+
+Action Buttons (role-gated, state-dependent):
+  If draft → "Confirm" button (transitions to waiting)
+  If waiting → "Assign & Reserve" button (transitions to ready)
+  If ready → "Validate" button (transitions to done) — THIS IS THE KEY ACTION
+  If not done → "Cancel" button (transitions to cancelled)
+  If done → no action buttons, show "Completed" badge
+  All buttons call PATCH /api/v1/operations/:id/transition (Member 2)
+
+Section 1 — Operation Info:
+  Card with: Type, Source Location, Destination Location, Partner,
+  Scheduled Date, Completed Date, Assigned Worker, Approved By, Notes
+
+Section 2 — Status Timeline (visual):
+  Horizontal timeline: Draft → Waiting → Ready → Done
+  Each step: circle + label + timestamp
+  Active step highlighted, completed steps green, future steps gray
+  Cancelled shows red X on the step where it was cancelled
+
+Section 3 — Moves Table:
+  Columns: Product (name + SKU), Lot (if applicable), Quantity, UoM,
+  From Location, To Location, Status
+  Data source: nested in GET /api/v1/operations/:id (Member 2)
+
+Section 4 — Audit Trail (collapsible):
+  List of state transitions with timestamps and user names
+  "Draft created by John at 10:00 AM"
+  "Confirmed by Jane at 10:15 AM"
+  "Validated by John at 11:00 AM"
+
+PAGE 10: CREATE OPERATION (/operations/new) — MULTI-STEP WIZARD
+---------------------------------------------------------------
+Layout: DashboardShell
+
+Step Indicator: 1. Type & Locations → 2. Add Items → 3. Review & Confirm
+
+STEP 1 — Type & Locations:
+  Operation Type (4 large clickable cards with icons):
+    Receipt (arrow down, green) — incoming from vendor
+    Delivery (arrow up, blue) — outgoing to customer
+    Internal Transfer (arrows left-right, purple) — between locations
+    Adjustment (wrench, orange) — stock correction
+  Based on type selection, show/hide fields:
+
+  For Receipt:
+    Source: auto-set to "Virtual Vendor" (non-editable)
+    Destination: Warehouse dropdown → Location dropdown
+    Supplier: Partner dropdown (type=supplier, from GET /api/v1/partners)
+    + "Add New Supplier" quick-create link
+
+  For Delivery:
+    Source: Warehouse dropdown → Location dropdown
+    Destination: auto-set to "Virtual Customer" (non-editable)
+    Customer: Partner dropdown (type=customer)
+
+  For Internal Transfer:
+    Source: Warehouse → Location
+    Destination: Warehouse → Location (different from source)
+
+  For Adjustment:
+    Location: Warehouse → Location
+    Adjustment Type: radio (Increase / Decrease)
+    Reason: text input (REQUIRED — audit requirement)
+
+  Scheduled Date: date picker (default today)
+  Notes: textarea (optional)
+
+STEP 2 — Add Items:
+  Product Search: autocomplete input → searches GET /api/v1/products?search=X
+  On select: adds row to items table
+  Items Table (editable):
+    Columns: Product (name + SKU), Current Stock (read-only, from quants),
+    Quantity (number input, editable), UoM (read-only), Remove (X button)
+  "Add Another Item" button
+  Validation: at least 1 item, all quantities > 0
+  For deliveries: show warning if quantity > available stock (red text)
+
+STEP 3 — Review & Confirm:
+  Summary card showing all info from Step 1 + Step 2
+  Operation type, locations, partner, date, items with quantities
+  "Confirm & Create" button → POST /api/v1/operations (Member 2)
+  "Back" button to edit previous steps
+  On success → toast "Operation [REF] created" → redirect to /operations/[id]
+
+PAGE 11: MOVE HISTORY (/move-history)
+-------------------------------------
+Layout: DashboardShell
+
+PageHeader: "Stock Ledger — Move History"
+
+Filter Bar:
+  Product search (autocomplete)
+  Location dropdown
+  Operation Type dropdown
+  Date range picker
+  Status dropdown
+
+Data Grid:
+  Columns: Date/Time, Operation Ref (clickable link), Type (badge),
+  Product (name + SKU), From Location, To Location, Quantity (+/- sign),
+  Status, User
+  Sorted by date descending (newest first)
+  Pagination: 50 per page (this is a high-volume view)
+  Data source: GET /api/v1/stock/moves?product_id=X&location_id=Y (Member 2)
+
+  Key UX: Quantity column shows +50 in green for incoming, -20 in red for outgoing.
+  This is the IMMUTABLE LEDGER view. No edit/delete actions. Read-only.
+
+PAGE 12: WAREHOUSES (/warehouses)
+---------------------------------
+Layout: DashboardShell
+
+PageHeader: "Warehouses & Locations", Button "Add Warehouse" (ADMIN only)
+
+Warehouse Cards (grid, 2-3 per row):
+  Each card: Warehouse name, code, address, location count, total stock value
+  Click to expand → shows Location Tree
+
+Location Tree (expandable, nested):
+  Warehouse
+    ├── Zone A
+    │   ├── Aisle 1
+    │   │   ├── Rack A (barcode: LOC-A1-RA)
+    │   │   └── Rack B (barcode: LOC-A1-RB)
+    │   └── Aisle 2
+    └── Zone B
+  Each location node: name, barcode, type badge, stock count
+  Click location → modal with details + edit form
+  "Add Location" button at each level (creates child location)
+
+Data sources:
+  Warehouses: GET /api/v1/warehouses (Member 3)
+  Locations: GET /api/v1/locations?warehouse_id=X (Member 3)
+
+PAGE 13: SETTINGS (/settings)
+-----------------------------
+Layout: DashboardShell
+
+Sections (accordion or tabs):
+  1. General: Default warehouse, date format, timezone
+  2. Notifications: Email alerts toggle, low stock threshold defaults
+  3. Categories: CRUD for product categories (tree view)
+  4. Users (ADMIN only): User list table, role change, deactivate
+  5. Data: CSV export buttons (products, move history, stock valuation)
+
+Data sources:
+  GET/PATCH /api/v1/settings (Member 3)
+  GET /api/v1/users (Member 3, ADMIN only)
+  GET /api/v1/categories (Member 3)
+
+PAGE 14: PROFILE (/profile)
+---------------------------
+Layout: DashboardShell
+
+Section 1 — Profile Info:
+  Avatar (placeholder circle with initials)
+  Name, Email (read-only), Phone
+  Edit button → inline form → PATCH /api/v1/profile (Member 3)
+
+Section 2 — Security:
+  Change Password form: Current Password, New Password, Confirm
+  POST /api/v1/profile/change-password (Member 3)
+
+Section 3 — Assigned Warehouses:
+  List of warehouses user has access to (read-only)
+
+Section 4 — Sync Status (from Member 4):
+  Online/Offline indicator (green/red dot)
+  Pending sync count
+  Last sync timestamp
+  (For hackathon: hardcode as "Online" with 0 pending)
+
+PAGE 15: TOPBAR (persistent across all dashboard pages)
+-------------------------------------------------------
+Left: Hamburger menu (toggles sidebar on mobile)
+Center: Global search input
+  - Debounced 300ms
+  - Calls GET /api/v1/search?q=X (Member 3)
+  - Dropdown results grouped: Products, Partners, Locations
+  - Click result → navigate to detail page
+Right:
+  - Notification bell icon with badge count
+    Badge: unread alert count from GET /api/v1/alerts (Member 4)
+    Dropdown: list of recent alerts, "Mark all read" button
+    For hackathon: show low stock alerts from dashboard KPI data
+  - User avatar dropdown:
+    "My Profile" → /profile
+    "Settings" → /settings
+    "Logout" → authStore.logout() → redirect /login
+
+PAGE 16: SIDEBAR (persistent left navigation)
+---------------------------------------------
+Logo: "StockSense" text + box icon at top
+Navigation items (with icons from Lucide):
+  📊 Dashboard → /dashboard
+  📦 Products → /products
+  📋 Operations → /operations (expandable submenu)
+     ├── Receipts → /operations/receipts
+     ├── Deliveries → /operations/deliveries
+     ├── Transfers → /operations/transfers
+     └── Adjustments → /operations/adjustments
+  📜 Move History → /move-history
+  🏭 Warehouses → /warehouses
+  ⚙️ Settings → /settings
+  👤 Profile → /profile (at bottom, above logout)
+Active item: highlighted background + left border accent
+Role-based visibility:
+  WAREHOUSE_WORKER sees: Dashboard (simplified), Operations, Move History, Profile
+  INVENTORY_MANAGER sees: everything
+  ADMIN sees: everything + Settings (full) + User Management
+
+================================================================================
+COMPONENT CONNECTION MAP
+================================================================================
+
+How frontend connects to each member's work:
+
+TO MEMBER 1 (DB):
+  - Indirect only. You never touch the DB from frontend.
+  - All data comes through Member 2 and Member 3 APIs.
+  - The views they create (view_stock_quants, view_dashboard_kpis) power
+    the API responses you consume.
+
+TO MEMBER 2 (YOU — Backend Core):
+  - Auth pages call your auth endpoints directly.
+  - Operations pages call your ledger endpoints.
+  - Stock/move history pages call your stock calculation endpoints.
+  - Axios interceptor handles your JWT refresh flow.
+  - ValidateButton component calls your state transition endpoint.
+  - This is the tightest coupling. Your frontend and backend must agree
+    on every request/response shape.
+
+TO MEMBER 3 (APIs):
+  - Products pages call their CRUD endpoints.
+  - Dashboard KPI cards call their dashboard aggregation endpoints.
+  - Warehouse/location pages call their location endpoints.
+  - Partner dropdowns in operation wizard call their partner endpoints.
+  - Settings and profile pages call their user/settings endpoints.
+  - Global search calls their search endpoint.
+
+TO MEMBER 4 (Features):
+  - Scan screen: you build the UI shell, they provide <BarcodeScanner /> component.
+    Import it: import { BarcodeScanner } from '@/components/scanner/BarcodeScanner'
+    Drop it into the scan tab. Wire onScan callback to your product lookup.
+  - Sync status: they provide useSyncStatus() hook.
+    Import: import { useSyncStatus } from '@/hooks/useSyncStatus'
+    Display in profile page and topbar indicator.
+  - Notifications: they set up WebSocket server.
+    You create a useWebSocket() hook that connects to ws://localhost:5000
+    Listen for 'notification' events → update alert badge count in topbar.
+    For hackathon: skip WS, just poll GET /api/v1/alerts every 60s.
+  - Alerts: they build the alert engine + endpoint.
+    You display alerts in dashboard and notification dropdown.
+  - CSV Import/Export: they build the endpoints.
+    You add "Export CSV" buttons on products list and move history pages.
+    You add "Import CSV" button on products page (file upload dialog).
+
+================================================================================
+HACKATHON SHORTCUTS (What to fake for the demo)
+================================================================================
+
+1. OTP Reset: Mock the OTP. Accept any 6-digit code. Don't wire real SMS/email.
+2. Notifications: Poll every 30s instead of WebSocket. Show low stock alerts only.
+3. Barcode Scanner: Show a text input field labeled "Scan Barcode" that accepts
+   manual typing. Member 4 can wire real camera later.
+4. Sync Status: Hardcode "Online" with green dot. No offline logic for demo.
+5. Image Upload: Use a URL text input instead of file upload to S3.
+6. CSV Import/Export: Skip for demo. Add buttons but show "Coming Soon" toast.
+7. Multi-warehouse: Create 2 warehouses in seed data. Filters work but
+   don't stress-test cross-warehouse transfers.
+8. RBAC: Create 2 users in seed (admin + worker). Hardcode role checks.
+   Don't build a full permission matrix UI.
+9. Charts: If Recharts is too heavy to set up in time, use simple CSS bar charts
+   or even just the KPI numbers without charts. Dashboard still works.
+10. Move History: Show last 50 moves. Don't build advanced filtering for demo.
+
+================================================================================
+BUILD ORDER (What to build first for maximum demo impact)
+================================================================================
+
+Hour 1: Project setup + Auth pages (login/signup) + Dashboard shell (sidebar/topbar)
+Hour 2: Dashboard KPI cards + Products list + Product create form
+Hour 3: Operations list + Create operation wizard (receipt + delivery)
+Hour 4: Operation detail + Validate button (the "magic moment" — stock changes!)
+Hour 5: Move history page + Warehouses page + Polish + Seed data + Demo rehearsal
+
+The "magic moment" for judges: Create a receipt → validate it → watch stock
+increase on the product page → create a delivery → validate → watch stock
+decrease → show the move history ledger with both entries. This proves the
+double-entry system works end-to-end.
+
+================================================================================
+END OF FRONTEND SPECIFICATION
+================================================================================
