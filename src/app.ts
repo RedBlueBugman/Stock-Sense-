@@ -3,6 +3,10 @@ import cors from 'cors';
 import helmet from 'helmet';
 import morgan from 'morgan';
 import dotenv from 'dotenv';
+import path from 'path';
+import swaggerUi from 'swagger-ui-express';
+import YAML from 'yamljs';
+
 import { AppError, handleDbError } from './shared/errorHandler';
 import { sendError } from './shared/response';
 
@@ -22,12 +26,24 @@ dotenv.config();
 
 const app = express();
 
-// Global Middlewares
-app.use(helmet());
+// Security & Middlewares
+app.use(
+  helmet({
+    contentSecurityPolicy: false, // Allows Swagger UI to render smoothly
+  })
+);
 app.use(cors());
 app.use(express.json({ limit: '10mb' }));
 if (process.env.NODE_ENV !== 'test') {
   app.use(morgan('dev'));
+}
+
+// 📚 Swagger / OpenAPI Documentation Route
+try {
+  const swaggerDocument = YAML.load(path.join(__dirname, 'docs/swagger.yaml'));
+  app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(swaggerDocument));
+} catch (err) {
+  console.warn('⚠️ Swagger doc load failed:', err);
 }
 
 // Health Check
@@ -35,6 +51,7 @@ app.get('/health', (req, res) => {
   res.status(200).json({
     status: 'ok',
     service: 'WMS Backend CRUD API (Member 3 - Data Layer)',
+    docs: '/api-docs',
     timestamp: new Date().toISOString(),
   });
 });
