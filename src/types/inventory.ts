@@ -1,3 +1,15 @@
+export type AlertType = 'critical' | 'warning' | 'info';
+
+export interface AlertItem {
+  id: string | number;
+  type: AlertType;
+  title: string;
+  message: string;
+  productName?: string;
+  timestamp: Date;
+  isRead: boolean;
+}
+
 export interface Product {
   id: number;
   sku: string;
@@ -6,6 +18,7 @@ export interface Product {
   category: string;
   current_stock: number;
   min_stock: number;
+  max_stock?: number;
   emoji: string;
   unitPrice?: number;
   location?: string;
