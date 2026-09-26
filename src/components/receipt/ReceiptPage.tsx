@@ -62,9 +62,8 @@ export const ReceiptPage: React.FC<ReceiptPageProps> = ({
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [receiptItems, isSubmitting]);
 
-  // Handle item scanned from BarcodeScannerModal
+  // Handle item scanned from BarcodeScannerModal (DOES NOT fire stock alerts until completed)
   const handleScanProduct = (scannedProduct: Product) => {
-    // Look up product from current global state
     const currentProductState = products.find((p) => p.id === scannedProduct.id) || scannedProduct;
 
     setReceiptItems((prev) => {
@@ -89,17 +88,9 @@ export const ReceiptPage: React.FC<ReceiptPageProps> = ({
         ];
       }
     });
-
-    // Provide user feedback toast
-    addAlert({
-      type: 'info',
-      title: 'Item Added to Inbound Receipt',
-      message: `${currentProductState.name} (${currentProductState.sku}) scanned for receipt ${receiptId}.`,
-      productName: currentProductState.name,
-    });
   };
 
-  // Adjust quantity
+  // Adjust quantity immediately
   const handleQuantityChange = (productId: number, newQty: number) => {
     setReceiptItems((prev) =>
       prev.map((item) => {
@@ -124,7 +115,7 @@ export const ReceiptPage: React.FC<ReceiptPageProps> = ({
     }
   };
 
-  // Prepopulate Demo Scenario
+  // Prepopulate Demo Scenario without firing premature alerts
   const handleLoadDemoReceipt = () => {
     const steelRods = products.find((p) => p.sku === 'SR001') || products[0];
     const officeChairs = products.find((p) => p.sku === 'CH003') || products[2];
@@ -136,15 +127,9 @@ export const ReceiptPage: React.FC<ReceiptPageProps> = ({
       { id: `ITEM-DEMO-3`, product: workbenches, quantity: 10 },
     ]);
     setStatus('draft');
-
-    addAlert({
-      type: 'info',
-      title: 'Demo Receipt Pre-Loaded',
-      message: 'Added Steel Rods × 50, Office Chairs × 20, and Workbenches × 10.',
-    });
   };
 
-  // Complete Receipt Workflow
+  // Complete Receipt Workflow: Updates Stock FIRST -> Fires Contextual Alerts -> Triggers Confetti -> Opens Modal
   const handleCompleteReceipt = () => {
     if (receiptItems.length === 0) {
       addAlert({
@@ -157,9 +142,9 @@ export const ReceiptPage: React.FC<ReceiptPageProps> = ({
 
     setIsSubmitting(true);
 
-    // 1-second processing delay simulation
+    // 800ms processing delay simulation
     setTimeout(() => {
-      // 1. Calculate updated products state
+      // 1. Calculate and update global stock state FIRST
       const updatedProductsList = products.map((prod) => {
         const itemReceived = receiptItems.find((it) => it.product.id === prod.id);
         if (itemReceived) {
@@ -173,10 +158,10 @@ export const ReceiptPage: React.FC<ReceiptPageProps> = ({
         return prod;
       });
 
-      // 2. Commit global stock update
+      // Commit to parent state immediately
       onUpdateProducts(updatedProductsList);
 
-      // 3. Trigger contextual alerts for each received item
+      // 2. Trigger contextual alerts for each received item AT COMPLETION TIME
       receiptItems.forEach((it) => {
         const initialStock = it.product.current_stock;
         const newStock = initialStock + it.quantity;
@@ -192,7 +177,7 @@ export const ReceiptPage: React.FC<ReceiptPageProps> = ({
           addAlert({
             type: 'warning',
             title: `OVERSTOCK NOTICE: ${it.product.name}`,
-            message: `${it.product.name} exceeds max capacity (${newStock}/${it.product.max_stock} units).`,
+            message: `${it.product.name} exceeds maximum capacity (${newStock}/${it.product.max_stock} units).`,
             productName: it.product.name,
           });
         } else if (initialStock < it.product.min_stock && newStock >= it.product.min_stock) {
@@ -205,7 +190,7 @@ export const ReceiptPage: React.FC<ReceiptPageProps> = ({
         }
       });
 
-      // 4. Create summary record
+      // 3. Create summary record
       const summary: ReceiptSummaryData = {
         id: receiptId,
         type: 'receipt',
@@ -220,20 +205,46 @@ export const ReceiptPage: React.FC<ReceiptPageProps> = ({
       setCompletedSummary(summary);
       setStatus('completed');
       setIsSubmitting(false);
+
+      // 4. Open Success Confirmation Modal (only after stock is committed)
       setIsSuccessModalOpen(true);
 
-      // 5. Confetti animation
+      // 5. Robust Multi-Cannon Confetti Animation
       try {
+        // Center Cannon
         confetti({
-          particleCount: 75,
+          particleCount: 80,
           spread: 80,
-          origin: { y: 0.6 },
-          colors: ['#10B981', '#8B5CF6', '#34D399', '#60A5FA'],
+          origin: { y: 0.5, x: 0.5 },
+          zIndex: 99999,
+          colors: ['#10B981', '#8B5CF6', '#34D399', '#60A5FA', '#F59E0B'],
         });
+        // Left Cannon
+        setTimeout(() => {
+          confetti({
+            particleCount: 50,
+            angle: 60,
+            spread: 55,
+            origin: { x: 0.1, y: 0.6 },
+            zIndex: 99999,
+            colors: ['#8B5CF6', '#34D399', '#10B981'],
+          });
+        }, 150);
+        // Right Cannon
+        setTimeout(() => {
+          confetti({
+            particleCount: 50,
+            angle: 120,
+            spread: 55,
+            origin: { x: 0.9, y: 0.6 },
+            zIndex: 99999,
+            colors: ['#8B5CF6', '#34D399', '#10B981'],
+          });
+        }, 300);
       } catch {
         // safe fallback
       }
-    }, 1000);
+    }, 800);
   };
 
   // Start fresh new receipt
@@ -253,7 +264,7 @@ export const ReceiptPage: React.FC<ReceiptPageProps> = ({
   });
 
   return (
-    <div className="space-y-8">
+    <div className="space-y-6">
       {/* SECTION A: TOP ACTIONS & RECEIPT HEADER */}
       <section className="rounded-3xl bg-gradient-to-r from-slate-900 via-purple-950/40 to-slate-900 border border-purple-500/20 p-6 sm:p-8 shadow-2xl backdrop-blur-xl relative overflow-hidden">
         <div className="absolute top-0 right-0 w-80 h-80 bg-purple-600/10 rounded-full blur-3xl pointer-events-none" />
@@ -277,7 +288,7 @@ export const ReceiptPage: React.FC<ReceiptPageProps> = ({
             <button
               type="button"
               onClick={handleLoadDemoReceipt}
-              className="px-4 py-2.5 rounded-xl bg-purple-600/20 hover:bg-purple-600/30 border border-purple-500/40 text-purple-200 text-xs font-bold transition-all flex items-center gap-2 cursor-pointer hover:scale-105 active:scale-95"
+              className="px-4 py-2.5 rounded-xl bg-purple-600/20 hover:bg-purple-600/30 border border-purple-500/40 text-purple-200 text-xs font-bold transition-all flex items-center gap-2 cursor-pointer hover:scale-105 active:scale-95 shadow-sm"
             >
               <Sparkles className="w-3.5 h-3.5 text-purple-400" />
               <span>Load Demo Receipt</span>
@@ -389,27 +400,27 @@ export const ReceiptPage: React.FC<ReceiptPageProps> = ({
             <button
               type="button"
               onClick={() => setIsScannerOpen(true)}
-              className="mt-5 px-5 py-2.5 rounded-xl bg-purple-600/30 hover:bg-purple-600/50 border border-purple-500/50 text-purple-200 text-xs font-bold transition-all flex items-center gap-2 cursor-pointer"
+              className="mt-5 px-5 py-2.5 rounded-xl bg-purple-600/30 hover:bg-purple-600/50 border border-purple-500/50 text-purple-200 text-xs font-bold transition-all flex items-center gap-2 cursor-pointer shadow-md"
             >
               <Scan className="w-4 h-4" />
               Scan First Item
             </button>
           </div>
         ) : (
-          /* Table View */
+          /* Animated Table View */
           <div className="overflow-x-auto">
             <table className="w-full text-left text-xs">
               <thead className="bg-slate-950/70 text-slate-400 font-mono uppercase tracking-wider border-b border-slate-800">
                 <tr>
-                  <th className="py-3 px-4 sm:px-6">Product</th>
-                  <th className="py-3 px-4 sm:px-6">Quantity Received</th>
-                  <th className="py-3 px-4 sm:px-6">Current Stock</th>
-                  <th className="py-3 px-4 sm:px-6">Stock Projection (Live)</th>
-                  <th className="py-3 px-4 sm:px-6 text-right">Action</th>
+                  <th className="py-3.5 px-4 sm:px-6">Product</th>
+                  <th className="py-3.5 px-4 sm:px-6">Quantity Received</th>
+                  <th className="py-3.5 px-4 sm:px-6">Current Stock</th>
+                  <th className="py-3.5 px-4 sm:px-6">Stock Projection (Live)</th>
+                  <th className="py-3.5 px-4 sm:px-6 text-right">Action</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-800/60 font-sans">
-                <AnimatePresence>
+                <AnimatePresence mode="popLayout">
                   {receiptItems.map((item) => (
                     <ReceiptItemRow
                       key={item.id}
