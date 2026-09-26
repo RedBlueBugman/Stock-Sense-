@@ -1,0 +1,2675 @@
+﻿STOCKSENSE CORE BACKEND DUMP
+Extracted: 09/26/2026 15:31:51
+
+
+================================================================================
+===== CORE: Stock-Sense--nithin-backend\Stock-Sense--nithin-backend\src\core\middleware\rbac.ts =====
+================================================================================
+import { Request, Response, NextFunction } from 'express';
+import { sendError } from '../../shared/response';
+
+export interface AuthenticatedUser {
+  id: string;
+  name: string;
+  email: string;
+  role: 'ADMIN' | 'INVENTORY_MANAGER' | 'VIEWER';
+  assigned_warehouses: string[];
+}
+
+// Extend Express Request type to include user
+declare global {
+  namespace Express {
+    interface Request {
+      user?: AuthenticatedUser;
+    }
+  }
+}
+
+export const requireRole = (allowedRoles: string | string[]) => {
+  return (req: Request, res: Response, next: NextFunction) => {
+    const roles = Array.isArray(allowedRoles) ? allowedRoles : [allowedRoles];
+    
+    // Fallback default dev user if auth token is not yet provided by Member 2
+    if (!req.user) {
+      req.user = {
+        id: '00000000-0000-0000-0000-000000000001',
+        name: 'Dev Admin',
+        email: 'admin@wms.local',
+        role: 'ADMIN',
+        assigned_warehouses: [],
+      };
+    }
+
+    if (roles.length > 0 && !roles.includes(req.user.role)) {
+      return sendError(res, 'FORBIDDEN', 'You do not have permission to access this resource', 403);
+    }
+
+    return next();
+  };
+};
+
+export const requireWarehouseAccess = () => {
+  return (req: Request, res: Response, next: NextFunction) => {
+    return next();
+  };
+};
+
+
+
+================================================================================
+===== CORE: Stock-Sense--nithin-backend\Stock-Sense--nithin-backend\src\core\services\ledger.ts =====
+================================================================================
+export const createOperation = async (operationData: any): Promise<any> => {
+  console.log('[Core Ledger Service Stub] createOperation called with:', operationData);
+  return { id: 'mock-op-id', status: 'done', ...operationData };
+};
+
+
+
+================================================================================
+===== CORE: Stock-Sense--nithin-backend\Stock-Sense--nithin-backend\src\core\services\stock-calculator.ts =====
+================================================================================
+import { query } from '../../shared/db';
+
+export interface StockQuant {
+  product_id: string;
+  warehouse_id?: string;
+  location_id?: string;
+  qty_available: number;
+  qty_reserved?: number;
+}
+
+export const getStockQuants = async (
+  productId: string,
+  warehouseId?: string
+): Promise<StockQuant[]> => {
+  try {
+    let sql = `SELECT * FROM view_stock_quants WHERE product_id = $1`;
+    const params: any[] = [productId];
+
+    if (warehouseId) {
+      sql += ` AND warehouse_id = $2`;
+      params.push(warehouseId);
+    }
+
+    const result = await query(sql, params);
+    return result.rows;
+  } catch (err) {
+    // Graceful fallback if view is not yet created in the DB by Member 1
+    return [{ product_id: productId, qty_available: 0, qty_reserved: 0 }];
+  }
+};
+
+
+
+================================================================================
+===== SHARED: Stock-Sense--nithin-backend\Stock-Sense--nithin-backend\src\shared\db.ts =====
+================================================================================
+import { Pool, QueryResult, QueryResultRow } from 'pg';
+import dotenv from 'dotenv';
+
+dotenv.config();
+
+const pool = new Pool({
+  host: process.env.DB_HOST || 'localhost',
+  port: parseInt(process.env.DB_PORT || '5432', 10),
+  database: process.env.DB_NAME || 'wms_db',
+  user: process.env.DB_USER || 'postgres',
+  password: process.env.DB_PASSWORD || 'postgres',
+  max: parseInt(process.env.DB_MAX_CONNECTIONS || '20', 10),
+  idleTimeoutMillis: 30000,
+  connectionTimeoutMillis: 5000,
+});
+
+pool.on('error', (err) => {
+  console.error('[DB] Unexpected error on idle client:', err);
+});
+
+export const query = async <T extends QueryResultRow = any>(
+  text: string,
+  params?: any[]
+): Promise<QueryResult<T>> => {
+  return pool.query<T>(text, params);
+};
+
+export default pool;
+
+
+
+================================================================================
+===== SHARED: Stock-Sense--nithin-backend\Stock-Sense--nithin-backend\src\shared\errorHandler.ts =====
+================================================================================
+export class AppError extends Error {
+  public statusCode: number;
+  public code: string;
+  public details?: any;
+
+  constructor(statusCode: number, code: string, message: string, details?: any) {
+    super(message);
+    this.statusCode = statusCode;
+    this.code = code;
+    this.details = details;
+    Object.setPrototypeOf(this, AppError.prototype);
+  }
+}
+
+// Maps PostgreSQL error codes to friendly HTTP errors as mandated by Section 10
+export const handleDbError = (err: any): AppError => {
+  // Unique Constraint Violation (e.g. duplicate SKU, email, barcode)
+  if (err.code === '23505') {
+    const detail = err.detail || '';
+    const match = detail.match(/Key \((.*?)\)=\((.*?)\) already exists/);
+    const message = match ? `Field '${match[1]}' with value '${match[2]}' already exists` : 'A duplicate entry already exists';
+    return new AppError(409, 'CONFLICT', message, { constraint: err.constraint });
+  }
+
+  // Foreign Key Violation (e.g. category_id or warehouse_id not found)
+  if (err.code === '23503') {
+    return new AppError(400, 'FOREIGN_KEY_VIOLATION', 'Referenced entity does not exist', { constraint: err.constraint });
+  }
+
+  // Check Constraint Violation (e.g. negative quantities or invalid status)
+  if (err.code === '23514') {
+    return new AppError(400, 'CHECK_CONSTRAINT_VIOLATION', 'Provided value violates database integrity check', { constraint: err.constraint });
+  }
+
+  // Not Null Violation
+  if (err.code === '23502') {
+    return new AppError(400, 'REQUIRED_FIELD_MISSING', `Required field '${err.column}' is missing`);
+  }
+
+  console.error('[Unhandled DB Error]:', err);
+  return new AppError(500, 'INTERNAL_SERVER_ERROR', 'A database operation error occurred');
+};
+
+
+
+================================================================================
+===== SHARED: Stock-Sense--nithin-backend\Stock-Sense--nithin-backend\src\shared\logger.ts =====
+================================================================================
+export const logger = {
+  info: (message: string, meta?: any) => {
+    console.log(`[${new Date().toISOString()}] [INFO] ${message}`, meta ? JSON.stringify(meta) : '');
+  },
+  warn: (message: string, meta?: any) => {
+    console.warn(`[${new Date().toISOString()}] [WARN] ${message}`, meta ? JSON.stringify(meta) : '');
+  },
+  error: (message: string, meta?: any) => {
+    console.error(`[${new Date().toISOString()}] [ERROR] ${message}`, meta ? JSON.stringify(meta) : '');
+  },
+  debug: (message: string, meta?: any) => {
+    if (process.env.NODE_ENV !== 'production') {
+      console.log(`[${new Date().toISOString()}] [DEBUG] ${message}`, meta ? JSON.stringify(meta) : '');
+    }
+  },
+};
+
+
+
+================================================================================
+===== SHARED: Stock-Sense--nithin-backend\Stock-Sense--nithin-backend\src\shared\redis.ts =====
+================================================================================
+import Redis from 'ioredis';
+import dotenv from 'dotenv';
+
+dotenv.config();
+
+export const redis = new Redis({
+  host: process.env.REDIS_HOST || '127.0.0.1',
+  port: parseInt(process.env.REDIS_PORT || '6379', 10),
+  password: process.env.REDIS_PASSWORD || undefined,
+  lazyConnect: true,
+  retryStrategy: (times) => Math.min(times * 50, 2000),
+});
+
+redis.on('connect', () => console.log('âœ… [Redis] Connected successfully'));
+redis.on('error', (err) => console.error('âŒ [Redis] Connection error:', err.message));
+
+// Helper: Get or compute cache
+export const getOrSetCache = async <T>(
+  key: string,
+  ttlSeconds: number,
+  fetchFunction: () => Promise<T>
+): Promise<T> => {
+  try {
+    const cachedData = await redis.get(key);
+    if (cachedData) {
+      return JSON.parse(cachedData) as T;
+    }
+  } catch (err) {
+    console.warn(`[Redis] Failed to read key ${key}:`, err);
+  }
+
+  const freshData = await fetchFunction();
+
+  try {
+    if (freshData !== null && freshData !== undefined) {
+      await redis.setex(key, ttlSeconds, JSON.stringify(freshData));
+    }
+  } catch (err) {
+    console.warn(`[Redis] Failed to cache key ${key}:`, err);
+  }
+
+  return freshData;
+};
+
+// Helper: Invalidate cache by pattern or key
+export const invalidateCache = async (keyOrPattern: string): Promise<void> => {
+  try {
+    if (keyOrPattern.includes('*')) {
+      const keys = await redis.keys(keyOrPattern);
+      if (keys.length > 0) {
+        await redis.del(...keys);
+      }
+    } else {
+      await redis.del(keyOrPattern);
+    }
+  } catch (err) {
+    console.warn(`[Redis] Invalidation failed for ${keyOrPattern}:`, err);
+  }
+};
+
+export default redis;
+
+
+
+================================================================================
+===== SHARED: Stock-Sense--nithin-backend\Stock-Sense--nithin-backend\src\shared\response.ts =====
+================================================================================
+import { Response } from 'express';
+
+export interface PaginationMeta {
+  total: number;
+  page: number;
+  limit: number;
+  totalPages: number;
+}
+
+export const sendSuccess = <T>(res: Response, data: T, meta?: PaginationMeta, statusCode = 200) => {
+  const payload: { data: T; meta?: PaginationMeta } = { data };
+  if (meta) {
+    payload.meta = meta;
+  }
+  return res.status(statusCode).json(payload);
+};
+
+export const sendPaginated = <T>(
+  res: Response,
+  data: T[],
+  total: number,
+  page: number,
+  limit: number,
+  statusCode = 200
+) => {
+  const totalPages = Math.ceil(total / limit) || 1;
+  return sendSuccess(res, data, { total, page, limit, totalPages }, statusCode);
+};
+
+export const sendError = (
+  res: Response,
+  code: string,
+  message: string,
+  statusCode = 400,
+  details?: any
+) => {
+  return res.status(statusCode).json({
+    error: {
+      code,
+      message,
+      ...(details !== undefined && { details }),
+    },
+  });
+};
+
+
+
+================================================================================
+===== SERVICE: Stock-Sense--nithin-backend\Stock-Sense--nithin-backend\src\api\services\category.service.ts =====
+================================================================================
+import { query } from '../../shared/db';
+import { AppError } from '../../shared/errorHandler';
+import { getOrSetCache, invalidateCache } from '../../shared/redis';
+import { CategoryCreateInput, CategoryUpdateInput } from '../schemas/category.schema';
+
+const CATEGORIES_CACHE_KEY = 'categories:flat_list';
+
+export class CategoryService {
+  /**
+   * Returns categories as a flat list with parent_id.
+   * Frontend builds the tree hierarchy.
+   */
+  async listCategories(includeCounts = false) {
+    const cacheKey = `${CATEGORIES_CACHE_KEY}:${includeCounts}`;
+
+    return getOrSetCache(cacheKey, 300, async () => {
+      try {
+        let sql = `
+          SELECT 
+            c.*,
+            ${includeCounts ? `COALESCE(p_count.total_products, 0)::integer AS product_count` : `0 AS product_count`}
+          FROM categories c
+        `;
+
+        if (includeCounts) {
+          sql += `
+            LEFT JOIN (
+              SELECT category_id, COUNT(*) AS total_products
+              FROM products
+              WHERE is_active = true
+              GROUP BY category_id
+            ) p_count ON p_count.category_id = c.id
+          `;
+        }
+
+        sql += ` WHERE c.is_active = true ORDER BY c.name ASC;`;
+
+        const res = await query(sql);
+        return res.rows;
+      } catch (err: any) {
+        if (err.code === '42P01') return [];
+        throw err;
+      }
+    });
+  }
+
+  /**
+   * Returns category detail + direct children list + product count
+   */
+  async getCategoryById(id: string) {
+    try {
+      // 1. Fetch category detail
+      const catSql = `
+        SELECT 
+          c.*,
+          COALESCE(COUNT(p.id), 0)::integer AS product_count
+        FROM categories c
+        LEFT JOIN products p ON p.category_id = c.id AND p.is_active = true
+        WHERE c.id = $1 AND c.is_active = true
+        GROUP BY c.id;
+      `;
+      const catRes = await query(catSql, [id]);
+
+      if (catRes.rows.length === 0) {
+        throw new AppError(404, 'NOT_FOUND', 'Category not found or inactive');
+      }
+
+      const category = catRes.rows[0];
+
+      // 2. Fetch direct children
+      const childrenSql = `
+        SELECT id, name, description, is_active, created_at
+        FROM categories
+        WHERE parent_category_id = $1 AND is_active = true
+        ORDER BY name ASC;
+      `;
+      const childrenRes = await query(childrenSql, [id]);
+      category.children = childrenRes.rows;
+
+      return category;
+    } catch (err: any) {
+      if (err instanceof AppError) throw err;
+      if (err.code === '42P01') throw new AppError(404, 'NOT_FOUND', 'Category not found');
+      throw err;
+    }
+  }
+
+  /**
+   * Helper: Check for circular references using PostgreSQL Recursive CTE
+   */
+  private async checkCircularReference(categoryId: string, targetParentId: string): Promise<boolean> {
+    if (categoryId === targetParentId) return true;
+
+    // Recursive query: check if categoryId exists anywhere in targetParentId's ancestry
+    const sql = `
+      WITH RECURSIVE CategoryTree AS (
+        SELECT id, parent_category_id
+        FROM categories
+        WHERE id = $1
+        UNION ALL
+        SELECT c.id, c.parent_category_id
+        FROM categories c
+        INNER JOIN CategoryTree ct ON ct.parent_category_id = c.id
+      )
+      SELECT id FROM CategoryTree WHERE id = $2;
+    `;
+
+    try {
+      const res = await query(sql, [targetParentId, categoryId]);
+      return res.rows.length > 0;
+    } catch (err: any) {
+      return false;
+    }
+  }
+
+  /**
+   * Create category with duplicate check per parent level
+   */
+  async createCategory(input: CategoryCreateInput) {
+    const parentId = input.parent_category_id || null;
+
+    // Check duplicate name at the same level
+    const dupCheckSql = `
+      SELECT id FROM categories 
+      WHERE name ILIKE $1 
+        AND (parent_category_id = $2 OR ($2 IS NULL AND parent_category_id IS NULL))
+        AND is_active = true;
+    `;
+    const dupRes = await query(dupCheckSql, [input.name, parentId]).catch(() => ({ rows: [] }));
+
+    if (dupRes.rows.length > 0) {
+      throw new AppError(409, 'CONFLICT', 'A category with this name already exists at this hierarchy level');
+    }
+
+    const insertSql = `
+      INSERT INTO categories (name, parent_category_id, description)
+      VALUES ($1, $2, $3)
+      RETURNING *;
+    `;
+
+    const res = await query(insertSql, [input.name, parentId, input.description || null]);
+    await invalidateCache('categories:*');
+    return res.rows[0];
+  }
+
+  /**
+   * Update category with circular reference check
+   */
+  async updateCategory(id: string, input: CategoryUpdateInput) {
+    if (input.parent_category_id) {
+      const isCircular = await this.checkCircularReference(id, input.parent_category_id);
+      if (isCircular) {
+        throw new AppError(400, 'CIRCULAR_REFERENCE', 'Circular hierarchy detected: a category cannot be its own ancestor');
+      }
+    }
+
+    const fields: string[] = [];
+    const values: any[] = [];
+    let idx = 1;
+
+    Object.entries(input).forEach(([key, val]) => {
+      if (val !== undefined) {
+        fields.push(`${key} = $${idx}`);
+        values.push(val);
+        idx++;
+      }
+    });
+
+    if (fields.length === 0) {
+      return this.getCategoryById(id);
+    }
+
+    fields.push(`updated_at = NOW()`);
+    values.push(id);
+
+    const sql = `
+      UPDATE categories
+      SET ${fields.join(', ')}
+      WHERE id = $${idx} AND is_active = true
+      RETURNING *;
+    `;
+
+    const res = await query(sql, values);
+    if (res.rows.length === 0) {
+      throw new AppError(404, 'NOT_FOUND', 'Category not found or inactive');
+    }
+
+    await invalidateCache('categories:*');
+    return res.rows[0];
+  }
+
+  /**
+   * Soft delete category (only if it has 0 active products)
+   */
+  async deleteCategory(id: string) {
+    try {
+      // 1. Check for attached active products
+      const countRes = await query(
+        `SELECT COUNT(*)::integer as count FROM products WHERE category_id = $1 AND is_active = true;`,
+        [id]
+      );
+      const productCount = parseInt(countRes.rows[0]?.count || '0', 10);
+
+      if (productCount > 0) {
+        throw new AppError(
+          400,
+          'CATEGORY_IN_USE',
+          `Cannot delete category containing ${productCount} active product(s). Reassign products first.`
+        );
+      }
+    } catch (err: any) {
+      if (err instanceof AppError) throw err;
+    }
+
+    // 2. Soft delete
+    const res = await query(
+      `UPDATE categories SET is_active = false, updated_at = NOW() WHERE id = $1 RETURNING id;`,
+      [id]
+    );
+
+    if (res.rows.length === 0) {
+      throw new AppError(404, 'NOT_FOUND', 'Category not found');
+    }
+
+    await invalidateCache('categories:*');
+    return { message: 'Category successfully deactivated' };
+  }
+}
+
+export const categoryService = new CategoryService();
+
+
+
+================================================================================
+===== SERVICE: Stock-Sense--nithin-backend\Stock-Sense--nithin-backend\src\api\services\dashboard.service.ts =====
+================================================================================
+import { query } from '../../shared/db';
+import { getOrSetCache } from '../../shared/redis';
+
+export class DashboardService {
+  /**
+   * Aggregated Dashboard KPIs cached in Redis for 30s
+   */
+  async getKpis(warehouseId?: string, userWarehouses?: string[]) {
+    const cacheKey = `dashboard:kpis:${warehouseId || 'all'}:${(userWarehouses || []).sort().join(',')}`;
+
+    return getOrSetCache(cacheKey, 30, async () => {
+      try {
+        // 1. Try DB view first
+        let viewSql = `SELECT * FROM view_dashboard_kpis`;
+        if (warehouseId) {
+          viewSql += ` WHERE warehouse_id = '${warehouseId}'`;
+        }
+        const viewRes = await query(viewSql).catch(() => null);
+
+        if (viewRes && viewRes.rows.length > 0) {
+          return viewRes.rows[0];
+        }
+
+        // 2. Direct dynamic calculation if view is not yet created by Member 1
+        const [productsRes, stockRes, opsRes, movesRes] = await Promise.all([
+          // Product count
+          query(`SELECT COUNT(*)::integer AS total_products FROM products WHERE is_active = true`),
+          
+          // Stock counts & stock value
+          query(`
+            SELECT 
+              COALESCE(SUM(vsq.qty_available * COALESCE(p.unit_cost, 0)), 0)::numeric AS total_stock_value,
+              COUNT(CASE WHEN vsq.qty_available <= p.reorder_min AND p.reorder_min > 0 THEN 1 END)::integer AS low_stock_count,
+              COUNT(CASE WHEN COALESCE(vsq.qty_available, 0) = 0 THEN 1 END)::integer AS out_of_stock_count
+            FROM products p
+            LEFT JOIN (
+              SELECT product_id, SUM(qty_available) AS qty_available
+              FROM view_stock_quants
+              ${warehouseId ? `WHERE warehouse_id = '${warehouseId}'` : ''}
+              GROUP BY product_id
+            ) vsq ON vsq.product_id = p.id
+            WHERE p.is_active = true
+          `).catch(() => ({ rows: [{ total_stock_value: 0, low_stock_count: 0, out_of_stock_count: 0 }] })),
+
+          // Pending operations
+          query(`
+            SELECT 
+              COUNT(CASE WHEN operation_type = 'receipt' AND status IN ('draft', 'waiting', 'ready') THEN 1 END)::integer AS pending_receipts,
+              COUNT(CASE WHEN operation_type = 'delivery' AND status IN ('draft', 'waiting', 'ready') THEN 1 END)::integer AS pending_deliveries,
+              COUNT(CASE WHEN operation_type = 'internal' AND status IN ('draft', 'waiting') THEN 1 END)::integer AS scheduled_transfers
+            FROM stock_operations
+            WHERE 1=1 ${warehouseId ? `AND warehouse_id = '${warehouseId}'` : ''}
+          `).catch(() => ({ rows: [{ pending_receipts: 0, pending_deliveries: 0, scheduled_transfers: 0 }] })),
+
+          // Movements today
+          query(`
+            SELECT COUNT(*)::integer AS today_movements
+            FROM stock_moves
+            WHERE created_at >= CURRENT_DATE
+          `).catch(() => ({ rows: [{ today_movements: 0 }] })),
+        ]);
+
+        return {
+          total_products: productsRes.rows[0]?.total_products || 0,
+          total_stock_value: parseFloat(stockRes.rows[0]?.total_stock_value || '0'),
+          low_stock_count: stockRes.rows[0]?.low_stock_count || 0,
+          out_of_stock_count: stockRes.rows[0]?.out_of_stock_count || 0,
+          pending_receipts: opsRes.rows[0]?.pending_receipts || 0,
+          pending_deliveries: opsRes.rows[0]?.pending_deliveries || 0,
+          scheduled_transfers: opsRes.rows[0]?.scheduled_transfers || 0,
+          today_movements: movesRes.rows[0]?.today_movements || 0,
+        };
+      } catch (err) {
+        return {
+          total_products: 0,
+          total_stock_value: 0,
+          low_stock_count: 0,
+          out_of_stock_count: 0,
+          pending_receipts: 0,
+          pending_deliveries: 0,
+          scheduled_transfers: 0,
+          today_movements: 0,
+        };
+      }
+    });
+  }
+
+  /**
+   * Recent operations read from Member 2's operations table
+   */
+  async getRecentOperations(warehouseId?: string, limit = 10) {
+    try {
+      let sql = `
+        SELECT 
+          o.id,
+          o.operation_type,
+          o.status,
+          o.reference,
+          o.created_at,
+          p.name AS partner_name,
+          src_l.name AS source_location_name,
+          dest_l.name AS dest_location_name,
+          COALESCE(lines.item_count, 0)::integer AS item_count
+        FROM stock_operations o
+        LEFT JOIN partners p ON p.id = o.partner_id
+        LEFT JOIN locations src_l ON src_l.id = o.source_location_id
+        LEFT JOIN locations dest_l ON dest_l.id = o.destination_location_id
+        LEFT JOIN (
+          SELECT operation_id, COUNT(*) AS item_count
+          FROM stock_moves
+          GROUP BY operation_id
+        ) lines ON lines.operation_id = o.id
+        WHERE 1=1
+      `;
+      const params: any[] = [];
+
+      if (warehouseId) {
+        sql += ` AND o.warehouse_id = $1`;
+        params.push(warehouseId);
+      }
+
+      sql += ` ORDER BY o.created_at DESC LIMIT $${params.length + 1};`;
+      params.push(limit);
+
+      const res = await query(sql, params);
+      return res.rows;
+    } catch (err: any) {
+      if (err.code === '42P01') return [];
+      throw err;
+    }
+  }
+
+  /**
+   * Low stock products table
+   */
+  async getLowStockProducts(warehouseId?: string, limit = 20) {
+    try {
+      const sql = `
+        SELECT 
+          p.id,
+          p.name,
+          p.sku,
+          p.reorder_min,
+          p.reorder_qty,
+          COALESCE(vsq.qty_available, 0)::numeric AS qty_available
+        FROM products p
+        INNER JOIN (
+          SELECT product_id, SUM(qty_available) AS qty_available
+          FROM view_stock_quants
+          ${warehouseId ? `WHERE warehouse_id = '${warehouseId}'` : ''}
+          GROUP BY product_id
+        ) vsq ON vsq.product_id = p.id
+        WHERE p.is_active = true 
+          AND p.reorder_min > 0 
+          AND vsq.qty_available <= p.reorder_min
+        ORDER BY vsq.qty_available ASC
+        LIMIT $1;
+      `;
+      const res = await query(sql, [limit]);
+      return res.rows;
+    } catch (err: any) {
+      if (err.code === '42P01') return [];
+      throw err;
+    }
+  }
+
+  /**
+   * Stock movements aggregated by date for line charts
+   */
+  async getMovementTrend(days = 30, warehouseId?: string) {
+    try {
+      const sql = `
+        SELECT 
+          DATE(sm.created_at) AS date,
+          COUNT(CASE WHEN sm.operation_type = 'receipt' THEN 1 END)::integer AS receipts,
+          COUNT(CASE WHEN sm.operation_type = 'delivery' THEN 1 END)::integer AS deliveries,
+          COUNT(CASE WHEN sm.operation_type = 'internal' THEN 1 END)::integer AS transfers,
+          COUNT(CASE WHEN sm.operation_type = 'adjustment' THEN 1 END)::integer AS adjustments
+        FROM stock_moves sm
+        WHERE sm.created_at >= NOW() - ($1 || ' days')::INTERVAL
+        ${warehouseId ? `AND sm.warehouse_id = '${warehouseId}'` : ''}
+        GROUP BY DATE(sm.created_at)
+        ORDER BY DATE(sm.created_at) ASC;
+      `;
+      const res = await query(sql, [days]);
+      return res.rows;
+    } catch (err: any) {
+      if (err.code === '42P01') return [];
+      throw err;
+    }
+  }
+}
+
+export const dashboardService = new DashboardService();
+
+
+
+================================================================================
+===== SERVICE: Stock-Sense--nithin-backend\Stock-Sense--nithin-backend\src\api\services\location.service.ts =====
+================================================================================
+import { query } from '../../shared/db';
+import { AppError } from '../../shared/errorHandler';
+import { LocationCreateInput, LocationUpdateInput, LocationQueryInput } from '../schemas/location.schema';
+
+export class LocationService {
+  /**
+   * Returns locations for a warehouse with stock summary per location
+   */
+  async listLocations(filters: LocationQueryInput) {
+    const { warehouse_id, location_type, parent_location_id } = filters;
+    const conditions: string[] = ['l.warehouse_id = $1', 'l.is_active = true'];
+    const params: any[] = [warehouse_id];
+    let idx = 2;
+
+    if (location_type) {
+      conditions.push(`l.location_type = $${idx}`);
+      params.push(location_type);
+      idx++;
+    }
+
+    if (parent_location_id) {
+      conditions.push(`l.parent_location_id = $${idx}`);
+      params.push(parent_location_id);
+      idx++;
+    }
+
+    const sql = `
+      SELECT 
+        l.*,
+        COALESCE(sq.total_products, 0)::integer AS total_products,
+        COALESCE(sq.total_qty, 0)::numeric AS total_qty
+      FROM locations l
+      LEFT JOIN (
+        SELECT 
+          location_id,
+          COUNT(DISTINCT product_id) AS total_products,
+          SUM(qty_available) AS total_qty
+        FROM view_stock_quants
+        GROUP BY location_id
+      ) sq ON sq.location_id = l.id
+      WHERE ${conditions.join(' AND ')}
+      ORDER BY l.name ASC;
+    `;
+
+    try {
+      const res = await query(sql, params);
+      return res.rows;
+    } catch (err: any) {
+      if (err.code === '42P01') return [];
+      throw err;
+    }
+  }
+
+  /**
+   * Get location detail + children locations + stock summary
+   */
+  async getLocationById(id: string) {
+    try {
+      const locSql = `
+        SELECT 
+          l.*,
+          w.name AS warehouse_name,
+          COALESCE(sq.total_products, 0)::integer AS total_products,
+          COALESCE(sq.total_qty, 0)::numeric AS total_qty
+        FROM locations l
+        LEFT JOIN warehouses w ON w.id = l.warehouse_id
+        LEFT JOIN (
+          SELECT 
+            location_id,
+            COUNT(DISTINCT product_id) AS total_products,
+            SUM(qty_available) AS total_qty
+          FROM view_stock_quants
+          GROUP BY location_id
+        ) sq ON sq.location_id = l.id
+        WHERE l.id = $1 AND l.is_active = true;
+      `;
+      const locRes = await query(locSql, [id]);
+
+      if (locRes.rows.length === 0) {
+        throw new AppError(404, 'NOT_FOUND', 'Location not found or inactive');
+      }
+
+      const location = locRes.rows[0];
+
+      // Fetch direct children
+      const childrenSql = `
+        SELECT id, name, barcode, location_type, is_active
+        FROM locations
+        WHERE parent_location_id = $1 AND is_active = true
+        ORDER BY name ASC;
+      `;
+      const childrenRes = await query(childrenSql, [id]);
+      location.children = childrenRes.rows;
+
+      return location;
+    } catch (err: any) {
+      if (err instanceof AppError) throw err;
+      if (err.code === '42P01') throw new AppError(404, 'NOT_FOUND', 'Location not found');
+      throw err;
+    }
+  }
+
+  /**
+   * Create location with validation
+   */
+  async createLocation(input: LocationCreateInput) {
+    // 1. Verify warehouse exists
+    const whRes = await query(`SELECT id FROM warehouses WHERE id = $1 AND is_active = true`, [input.warehouse_id]);
+    if (whRes.rows.length === 0) {
+      throw new AppError(400, 'INVALID_WAREHOUSE', 'Target warehouse does not exist or is inactive');
+    }
+
+    // 2. If parent location is given, verify it belongs to the SAME warehouse
+    if (input.parent_location_id) {
+      const parentRes = await query(
+        `SELECT id, warehouse_id FROM locations WHERE id = $1 AND is_active = true`,
+        [input.parent_location_id]
+      );
+      if (parentRes.rows.length === 0) {
+        throw new AppError(400, 'INVALID_PARENT_LOCATION', 'Parent location does not exist');
+      }
+      if (parentRes.rows[0].warehouse_id !== input.warehouse_id) {
+        throw new AppError(400, 'CROSS_WAREHOUSE_PARENT', 'Parent location must belong to the exact same warehouse');
+      }
+    }
+
+    // 3. Verify barcode uniqueness within warehouse
+    if (input.barcode) {
+      const barcodeRes = await query(
+        `SELECT id FROM locations WHERE warehouse_id = $1 AND barcode = $2 AND is_active = true`,
+        [input.warehouse_id, input.barcode]
+      );
+      if (barcodeRes.rows.length > 0) {
+        throw new AppError(409, 'DUPLICATE_BARCODE', 'Barcode already exists in this warehouse');
+      }
+    }
+
+    const insertSql = `
+      INSERT INTO locations (warehouse_id, parent_location_id, name, barcode, location_type)
+      VALUES ($1, $2, $3, $4, $5)
+      RETURNING *;
+    `;
+
+    const res = await query(insertSql, [
+      input.warehouse_id,
+      input.parent_location_id || null,
+      input.name,
+      input.barcode || null,
+      input.location_type || 'internal',
+    ]);
+
+    return res.rows[0];
+  }
+
+  /**
+   * Update location (cannot change location_type)
+   */
+  async updateLocation(id: string, input: LocationUpdateInput) {
+    const locRes = await query(`SELECT * FROM locations WHERE id = $1 AND is_active = true`, [id]);
+    if (locRes.rows.length === 0) {
+      throw new AppError(404, 'NOT_FOUND', 'Location not found or inactive');
+    }
+    const currentLocation = locRes.rows[0];
+
+    // Parent location validation
+    if (input.parent_location_id) {
+      if (input.parent_location_id === id) {
+        throw new AppError(400, 'CIRCULAR_REFERENCE', 'Location cannot be its own parent');
+      }
+      const parentRes = await query(
+        `SELECT id, warehouse_id FROM locations WHERE id = $1 AND is_active = true`,
+        [input.parent_location_id]
+      );
+      if (parentRes.rows.length === 0 || parentRes.rows[0].warehouse_id !== currentLocation.warehouse_id) {
+        throw new AppError(400, 'INVALID_PARENT_LOCATION', 'Parent location must belong to the same warehouse');
+      }
+    }
+
+    // Barcode check
+    if (input.barcode) {
+      const barRes = await query(
+        `SELECT id FROM locations WHERE warehouse_id = $1 AND barcode = $2 AND id != $3 AND is_active = true`,
+        [currentLocation.warehouse_id, input.barcode, id]
+      );
+      if (barRes.rows.length > 0) {
+        throw new AppError(409, 'DUPLICATE_BARCODE', 'Barcode already in use in this warehouse');
+      }
+    }
+
+    const fields: string[] = [];
+    const values: any[] = [];
+    let idx = 1;
+
+    Object.entries(input).forEach(([key, val]) => {
+      if (val !== undefined) {
+        fields.push(`${key} = $${idx}`);
+        values.push(val);
+        idx++;
+      }
+    });
+
+    if (fields.length === 0) return currentLocation;
+
+    fields.push(`updated_at = NOW()`);
+    values.push(id);
+
+    const updateSql = `
+      UPDATE locations
+      SET ${fields.join(', ')}
+      WHERE id = $${idx}
+      RETURNING *;
+    `;
+
+    const res = await query(updateSql, values);
+    return res.rows[0];
+  }
+}
+
+export const locationService = new LocationService();
+
+
+
+================================================================================
+===== SERVICE: Stock-Sense--nithin-backend\Stock-Sense--nithin-backend\src\api\services\partner.service.ts =====
+================================================================================
+import { query } from '../../shared/db';
+import { AppError } from '../../shared/errorHandler';
+import { PartnerCreateInput, PartnerUpdateInput, PartnerQueryInput } from '../schemas/partner.schema';
+
+export class PartnerService {
+  /**
+   * List paginated partners with search and type filters
+   */
+  async listPartners(filters: PartnerQueryInput) {
+    const { page, limit, search, type, sort_by, sort_order } = filters;
+    const offset = (page - 1) * limit;
+
+    const conditions: string[] = ['is_active = true'];
+    const params: any[] = [];
+    let idx = 1;
+
+    if (search) {
+      conditions.push(`name ILIKE $${idx}`);
+      params.push(`%${search}%`);
+      idx++;
+    }
+
+    if (type) {
+      conditions.push(`(type = $${idx} OR type = 'both')`);
+      params.push(type);
+      idx++;
+    }
+
+    const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
+
+    const countSql = `SELECT COUNT(*) as total FROM partners ${whereClause};`;
+    const dataSql = `
+      SELECT * FROM partners
+      ${whereClause}
+      ORDER BY ${sort_by} ${sort_order.toUpperCase()}
+      LIMIT $${idx} OFFSET $${idx + 1};
+    `;
+
+    params.push(limit, offset);
+
+    try {
+      const [countRes, dataRes] = await Promise.all([
+        query(countSql, params.slice(0, idx - 1)),
+        query(dataSql, params),
+      ]);
+
+      const total = parseInt(countRes.rows[0]?.total || '0', 10);
+      return { partners: dataRes.rows, total };
+    } catch (err: any) {
+      if (err.code === '42P01') return { partners: [], total: 0 };
+      throw err;
+    }
+  }
+
+  /**
+   * Get partner detail + summary of operations (receipts, deliveries, last operation date)
+   */
+  async getPartnerById(id: string) {
+    try {
+      const partnerSql = `SELECT * FROM partners WHERE id = $1 AND is_active = true;`;
+      const partnerRes = await query(partnerSql, [id]);
+
+      if (partnerRes.rows.length === 0) {
+        throw new AppError(404, 'NOT_FOUND', 'Partner not found or inactive');
+      }
+
+      const partner = partnerRes.rows[0];
+
+      // Aggregate operations summary from Member 2's stock_operations table
+      const opsSummarySql = `
+        SELECT 
+          COUNT(CASE WHEN operation_type = 'receipt' THEN 1 END)::integer AS total_receipts,
+          COUNT(CASE WHEN operation_type = 'delivery' THEN 1 END)::integer AS total_deliveries,
+          MAX(created_at) AS last_operation_date
+        FROM stock_operations
+        WHERE partner_id = $1;
+      `;
+
+      const summaryRes = await query(opsSummarySql, [id]).catch(() => ({
+        rows: [{ total_receipts: 0, total_deliveries: 0, last_operation_date: null }],
+      }));
+
+      partner.operations_summary = summaryRes.rows[0];
+      return partner;
+    } catch (err: any) {
+      if (err instanceof AppError) throw err;
+      if (err.code === '42P01') throw new AppError(404, 'NOT_FOUND', 'Partner not found');
+      throw err;
+    }
+  }
+
+  /**
+   * Create partner
+   */
+  async createPartner(input: PartnerCreateInput) {
+    const insertSql = `
+      INSERT INTO partners (name, type, email, phone, address)
+      VALUES ($1, $2, $3, $4, $5)
+      RETURNING *;
+    `;
+
+    const res = await query(insertSql, [
+      input.name,
+      input.type || 'both',
+      input.email || null,
+      input.phone || null,
+      input.address || null,
+    ]);
+
+    return res.rows[0];
+  }
+
+  /**
+   * Update partner details
+   */
+  async updatePartner(id: string, input: PartnerUpdateInput) {
+    const fields: string[] = [];
+    const values: any[] = [];
+    let idx = 1;
+
+    Object.entries(input).forEach(([key, val]) => {
+      if (val !== undefined) {
+        fields.push(`${key} = $${idx}`);
+        values.push(val);
+        idx++;
+      }
+    });
+
+    if (fields.length === 0) {
+      return this.getPartnerById(id);
+    }
+
+    fields.push(`updated_at = NOW()`);
+    values.push(id);
+
+    const sql = `
+      UPDATE partners
+      SET ${fields.join(', ')}
+      WHERE id = $${idx} AND is_active = true
+      RETURNING *;
+    `;
+
+    const res = await query(sql, values);
+    if (res.rows.length === 0) {
+      throw new AppError(404, 'NOT_FOUND', 'Partner not found or inactive');
+    }
+
+    return res.rows[0];
+  }
+
+  /**
+   * Soft delete partner.
+   * Safety check: Cannot delete if partner has active operations (status != done and != cancelled).
+   */
+  async deletePartner(id: string) {
+    try {
+      const activeOpsSql = `
+        SELECT COUNT(*)::integer AS active_count
+        FROM stock_operations
+        WHERE partner_id = $1 AND status NOT IN ('done', 'cancelled');
+      `;
+      const opsRes = await query(activeOpsSql, [id]);
+      const activeCount = parseInt(opsRes.rows[0]?.active_count || '0', 10);
+
+      if (activeCount > 0) {
+        throw new AppError(
+          400,
+          'ACTIVE_OPERATIONS_EXIST',
+          `Cannot delete partner with ${activeCount} active operation(s). Complete or cancel them first.`
+        );
+      }
+    } catch (err: any) {
+      if (err instanceof AppError) throw err;
+    }
+
+    const res = await query(
+      `UPDATE partners SET is_active = false, updated_at = NOW() WHERE id = $1 RETURNING id;`,
+      [id]
+    );
+
+    if (res.rows.length === 0) {
+      throw new AppError(404, 'NOT_FOUND', 'Partner not found');
+    }
+
+    return { message: 'Partner successfully deactivated' };
+  }
+}
+
+export const partnerService = new PartnerService();
+
+
+
+================================================================================
+===== SERVICE: Stock-Sense--nithin-backend\Stock-Sense--nithin-backend\src\api\services\product.service.ts =====
+================================================================================
+import pool, { query } from '../../shared/db';
+import { AppError } from '../../shared/errorHandler';
+import { createOperation } from '../../core/services/ledger';
+import { ProductCreateInput, ProductUpdateInput, ProductQueryInput } from '../schemas/product.schema';
+
+export class ProductService {
+  /**
+   * List products with dynamic filters, pagination, sorting, and stock status joins
+   */
+  async listProducts(filters: ProductQueryInput) {
+    const { page, limit, search, category_id, warehouse_id, stock_status, sort_by, sort_order } = filters;
+    const offset = (page - 1) * limit;
+
+    const conditions: string[] = ['p.is_active = true'];
+    const params: any[] = [];
+    let paramIndex = 1;
+
+    // Search partial match on SKU or Name (GIN / ILIKE)
+    if (search) {
+      conditions.push(`(p.name ILIKE $${paramIndex} OR p.sku ILIKE $${paramIndex})`);
+      params.push(`%${search}%`);
+      paramIndex++;
+    }
+
+    // Category filter
+    if (category_id) {
+      conditions.push(`p.category_id = $${paramIndex}`);
+      params.push(category_id);
+      paramIndex++;
+    }
+
+    let whereClause = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
+
+    // Stock status conditions (using view_stock_quants)
+    let stockJoin = `
+      LEFT JOIN (
+        SELECT product_id, COALESCE(SUM(qty_available), 0) AS total_stock
+        FROM view_stock_quants
+        ${warehouse_id ? `WHERE warehouse_id = '${warehouse_id}'` : ''}
+        GROUP BY product_id
+      ) vsq ON vsq.product_id = p.id
+    `;
+
+    if (stock_status === 'in_stock') {
+      whereClause += ` AND COALESCE(vsq.total_stock, 0) > p.reorder_min`;
+    } else if (stock_status === 'low') {
+      whereClause += ` AND COALESCE(vsq.total_stock, 0) > 0 AND COALESCE(vsq.total_stock, 0) <= p.reorder_min`;
+    } else if (stock_status === 'out') {
+      whereClause += ` AND COALESCE(vsq.total_stock, 0) = 0`;
+    }
+
+    // Total Count query for pagination meta
+    const countSql = `
+      SELECT COUNT(DISTINCT p.id) as total
+      FROM products p
+      ${stockJoin}
+      ${whereClause}
+    `;
+
+    // Map sort column
+    let orderColumn = 'p.created_at';
+    if (sort_by === 'name') orderColumn = 'p.name';
+    if (sort_by === 'sku') orderColumn = 'p.sku';
+    if (sort_by === 'stock_qty') orderColumn = 'COALESCE(vsq.total_stock, 0)';
+
+    // Data query
+    const dataSql = `
+      SELECT 
+        p.*,
+        c.name as category_name,
+        COALESCE(vsq.total_stock, 0)::numeric AS stock_qty
+      FROM products p
+      LEFT JOIN categories c ON c.id = p.category_id
+      ${stockJoin}
+      ${whereClause}
+      ORDER BY ${orderColumn} ${sort_order.toUpperCase()}
+      LIMIT $${paramIndex} OFFSET $${paramIndex + 1}
+    `;
+
+    params.push(limit, offset);
+
+    try {
+      const [countResult, dataResult] = await Promise.all([
+        query(countSql, params.slice(0, paramIndex - 1)),
+        query(dataSql, params),
+      ]);
+
+      const total = parseInt(countResult.rows[0]?.total || '0', 10);
+      return { products: dataResult.rows, total };
+    } catch (err: any) {
+      // Graceful fallback if database tables/views are not yet created by Member 1
+      if (err.code === '42P01') {
+        return { products: [], total: 0 };
+      }
+      throw err;
+    }
+  }
+
+  /**
+   * Get single product detail + stock per location
+   */
+  async getProductById(id: string, userRole?: string) {
+    const productSql = `
+      SELECT p.*, c.name as category_name
+      FROM products p
+      LEFT JOIN categories c ON c.id = p.category_id
+      WHERE p.id = $1
+    `;
+
+    try {
+      const productRes = await query(productSql, [id]);
+      if (productRes.rows.length === 0) {
+        throw new AppError(404, 'NOT_FOUND', 'Product not found');
+      }
+
+      const product = productRes.rows[0];
+
+      // Hide inactive products unless user is ADMIN
+      if (!product.is_active && userRole !== 'ADMIN') {
+        throw new AppError(404, 'NOT_FOUND', 'Product not found or inactive');
+      }
+
+      // Fetch stock per location from view_stock_quants
+      const stockSql = `
+        SELECT location_id, location_name, warehouse_id, warehouse_name, qty_available, qty_reserved
+        FROM view_stock_quants
+        WHERE product_id = $1
+      `;
+      const stockRes = await query(stockSql, [id]).catch(() => ({ rows: [] }));
+      product.locations_stock = stockRes.rows;
+
+      return product;
+    } catch (err: any) {
+      if (err.code === '42P01') {
+        throw new AppError(404, 'NOT_FOUND', 'Product not found (tables initializing)');
+      }
+      throw err;
+    }
+  }
+
+  /**
+   * Create product + trigger optional initial stock adjustment via Ledger Service
+   */
+  async createProduct(input: ProductCreateInput, userId: string) {
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+
+      const insertSql = `
+        INSERT INTO products (
+          name, sku, barcode, category_id, unit_of_measure, 
+          tracking_type, reorder_min, reorder_max, reorder_qty, image_url, created_by
+        )
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+        RETURNING *;
+      `;
+
+      const values = [
+        input.name,
+        input.sku,
+        input.barcode || null,
+        input.category_id || null,
+        input.unit_of_measure || 'pcs',
+        input.tracking_type || 'none',
+        input.reorder_min || 0,
+        input.reorder_max || 0,
+        input.reorder_qty || 0,
+        input.image_url || null,
+        userId,
+      ];
+
+      const res = await client.query(insertSql, values);
+      const product = res.rows[0];
+
+      // If initial stock was provided, trigger Member 2's ledger service
+      if (input.initial_stock && input.initial_stock.qty > 0) {
+        await createOperation({
+          operation_type: 'adjustment',
+          product_id: product.id,
+          warehouse_id: input.initial_stock.warehouse_id,
+          destination_location_id: input.initial_stock.location_id,
+          qty: input.initial_stock.qty,
+          notes: 'Initial stock on product creation',
+          created_by: userId,
+        });
+      }
+
+      await client.query('COMMIT');
+      return product;
+    } catch (err) {
+      await client.query('ROLLBACK');
+      throw err;
+    } finally {
+      client.release();
+    }
+  }
+
+  /**
+   * Update product details
+   */
+  async updateProduct(id: string, input: ProductUpdateInput) {
+    const fields: string[] = [];
+    const values: any[] = [];
+    let idx = 1;
+
+    Object.entries(input).forEach(([key, val]) => {
+      if (val !== undefined) {
+        fields.push(`${key} = $${idx}`);
+        values.push(val);
+        idx++;
+      }
+    });
+
+    if (fields.length === 0) {
+      return this.getProductById(id, 'ADMIN');
+    }
+
+    fields.push(`updated_at = NOW()`);
+    values.push(id);
+
+    const sql = `
+      UPDATE products
+      SET ${fields.join(', ')}
+      WHERE id = $${idx} AND is_active = true
+      RETURNING *;
+    `;
+
+    const res = await query(sql, values);
+    if (res.rows.length === 0) {
+      throw new AppError(404, 'NOT_FOUND', 'Product not found or inactive');
+    }
+
+    return res.rows[0];
+  }
+
+  /**
+   * Soft delete product (is_active = false).
+   * Refuses deletion if product has active stock (qty > 0).
+   */
+  async deleteProduct(id: string) {
+    // 1. Check if stock > 0 in any location
+    try {
+      const stockRes = await query(
+        `SELECT COALESCE(SUM(qty_available), 0) as total_qty FROM view_stock_quants WHERE product_id = $1`,
+        [id]
+      );
+      const totalQty = parseFloat(stockRes.rows[0]?.total_qty || '0');
+      if (totalQty > 0) {
+        throw new AppError(400, 'ACTIVE_STOCK_EXISTS', 'Cannot delete product with active stock');
+      }
+    } catch (err: any) {
+      if (err instanceof AppError) throw err;
+      // If view doesn't exist yet, proceed with soft delete
+    }
+
+    // 2. Soft delete
+    const res = await query(
+      `UPDATE products SET is_active = false, updated_at = NOW() WHERE id = $1 RETURNING id`,
+      [id]
+    );
+
+    if (res.rows.length === 0) {
+      throw new AppError(404, 'NOT_FOUND', 'Product not found');
+    }
+
+    return { message: 'Product successfully deactivated' };
+  }
+
+  /**
+   * Bulk insert products (wrapped in transaction, up to 500 items)
+   */
+  async bulkCreateProducts(products: ProductCreateInput[], userId: string) {
+    const client = await pool.connect();
+    const report = {
+      created: 0,
+      failed: 0,
+      errors: [] as { row: number; sku: string; reason: string }[],
+    };
+
+    try {
+      await client.query('BEGIN');
+
+      for (let i = 0; i < products.length; i++) {
+        const item = products[i];
+        try {
+          const insertSql = `
+            INSERT INTO products (
+              name, sku, barcode, category_id, unit_of_measure, 
+              tracking_type, reorder_min, reorder_max, reorder_qty, image_url, created_by
+            )
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+          `;
+          await client.query(insertSql, [
+            item.name,
+            item.sku,
+            item.barcode || null,
+            item.category_id || null,
+            item.unit_of_measure || 'pcs',
+            item.tracking_type || 'none',
+            item.reorder_min || 0,
+            item.reorder_max || 0,
+            item.reorder_qty || 0,
+            item.image_url || null,
+            userId,
+          ]);
+          report.created++;
+        } catch (rowErr: any) {
+          report.failed++;
+          let reason = 'Insertion failed';
+          if (rowErr.code === '23505') reason = 'Duplicate SKU or Barcode';
+          if (rowErr.code === '23503') reason = 'Category ID not found';
+          report.errors.push({ row: i + 1, sku: item.sku, reason });
+        }
+      }
+
+      // If any row failed, we commit only if needed, or wrap all-or-nothing
+      await client.query('COMMIT');
+      return report;
+    } catch (err) {
+      await client.query('ROLLBACK');
+      throw err;
+    } finally {
+      client.release();
+    }
+  }
+}
+
+export const productService = new ProductService();
+
+
+
+================================================================================
+===== SERVICE: Stock-Sense--nithin-backend\Stock-Sense--nithin-backend\src\api\services\search.service.ts =====
+================================================================================
+import { query } from '../../shared/db';
+import { getOrSetCache } from '../../shared/redis';
+
+export class SearchService {
+  /**
+   * Global Search across products, partners, and locations (5 items each)
+   */
+  async globalSearch(searchTerm: string) {
+    const term = `%${searchTerm}%`;
+
+    try {
+      const [productsRes, partnersRes, locationsRes] = await Promise.all([
+        // Search Products
+        query(
+          `SELECT id, name, sku, barcode, 'product' AS entity_type 
+           FROM products 
+           WHERE is_active = true AND (name ILIKE $1 OR sku ILIKE $1 OR barcode ILIKE $1) 
+           LIMIT 5;`,
+          [term]
+        ).catch(() => ({ rows: [] })),
+
+        // Search Partners
+        query(
+          `SELECT id, name, type, email, 'partner' AS entity_type 
+           FROM partners 
+           WHERE is_active = true AND name ILIKE $1 
+           LIMIT 5;`,
+          [term]
+        ).catch(() => ({ rows: [] })),
+
+        // Search Locations
+        query(
+          `SELECT l.id, l.name, l.barcode, l.location_type, w.name AS warehouse_name, 'location' AS entity_type 
+           FROM locations l
+           LEFT JOIN warehouses w ON w.id = l.warehouse_id
+           WHERE l.is_active = true AND (l.name ILIKE $1 OR l.barcode ILIKE $1) 
+           LIMIT 5;`,
+          [term]
+        ).catch(() => ({ rows: [] })),
+      ]);
+
+      return {
+        products: productsRes.rows,
+        partners: partnersRes.rows,
+        locations: locationsRes.rows,
+      };
+    } catch (err) {
+      return { products: [], partners: [], locations: [] };
+    }
+  }
+
+  /**
+   * Units of Measure reference list (Cached for 1 hour)
+   */
+  async getUnitsOfMeasure() {
+    return getOrSetCache('ref:units_of_measure', 3600, async () => {
+      return [
+        { code: 'pcs', name: 'Pieces', type: 'unit' },
+        { code: 'kg', name: 'Kilograms', type: 'weight' },
+        { code: 'g', name: 'Grams', type: 'weight' },
+        { code: 'l', name: 'Liters', type: 'volume' },
+        { code: 'ml', name: 'Milliliters', type: 'volume' },
+        { code: 'm', name: 'Meters', type: 'length' },
+        { code: 'box', name: 'Boxes', type: 'packaging' },
+        { code: 'pallet', name: 'Pallets', type: 'packaging' },
+      ];
+    });
+  }
+
+  /**
+   * Allowed status transitions for frontend buttons
+   */
+  async getOperationStatuses() {
+    return getOrSetCache('ref:operation_statuses', 3600, async () => {
+      return {
+        statuses: ['draft', 'waiting', 'ready', 'done', 'cancelled'],
+        allowed_transitions: {
+          draft: ['waiting', 'cancelled'],
+          waiting: ['ready', 'cancelled'],
+          ready: ['done', 'cancelled'],
+          done: [],
+          cancelled: [],
+        },
+      };
+    });
+  }
+
+  /**
+   * Supported location types reference
+   */
+  async getLocationTypes() {
+    return getOrSetCache('ref:location_types', 3600, async () => {
+      return [
+        { code: 'internal', name: 'Internal Physical Storage', user_creatable: true },
+        { code: 'vendor', name: 'Vendor / Supplier Location', user_creatable: false },
+        { code: 'customer', name: 'Customer Destination Location', user_creatable: false },
+        { code: 'inventory_loss', name: 'Inventory Loss / Adjustment', user_creatable: false },
+        { code: 'transit', name: 'Inter-Warehouse Transit Location', user_creatable: false },
+      ];
+    });
+  }
+}
+
+export const searchService = new SearchService();
+
+
+
+================================================================================
+===== SERVICE: Stock-Sense--nithin-backend\Stock-Sense--nithin-backend\src\api\services\settings.service.ts =====
+================================================================================
+import pool, { query } from '../../shared/db';
+import { getOrSetCache, invalidateCache } from '../../shared/redis';
+
+const SETTINGS_CACHE_KEY = 'system:settings';
+
+export class SettingsService {
+  /**
+   * Fetch all system settings from key-value table
+   */
+  async getSettings() {
+    return getOrSetCache(SETTINGS_CACHE_KEY, 3600, async () => {
+      try {
+        const res = await query(`SELECT key, value FROM settings;`);
+        const settingsMap: Record<string, any> = {};
+        res.rows.forEach((row) => {
+          settingsMap[row.key] = row.value;
+        });
+        return settingsMap;
+      } catch (err: any) {
+        if (err.code === '42P01') {
+          return {
+            default_warehouse: null,
+            reservation_timeout_minutes: 60,
+            allow_negative_stock: false,
+            notification_email: 'notifications@wms.local',
+          };
+        }
+        throw err;
+      }
+    });
+  }
+
+  /**
+   * Upsert system settings in a transaction
+   */
+  async updateSettings(settingsMap: Record<string, any>) {
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+
+      for (const [key, value] of Object.entries(settingsMap)) {
+        const sql = `
+          INSERT INTO settings (key, value, updated_at)
+          VALUES ($1, $2, NOW())
+          ON CONFLICT (key) DO UPDATE
+          SET value = EXCLUDED.value, updated_at = NOW();
+        `;
+        await client.query(sql, [key, JSON.stringify(value)]);
+      }
+
+      await client.query('COMMIT');
+      await invalidateCache(SETTINGS_CACHE_KEY);
+      return this.getSettings();
+    } catch (err) {
+      await client.query('ROLLBACK');
+      throw err;
+    } finally {
+      client.release();
+    }
+  }
+}
+
+export const settingsService = new SettingsService();
+
+
+
+================================================================================
+===== SERVICE: Stock-Sense--nithin-backend\Stock-Sense--nithin-backend\src\api\services\user.service.ts =====
+================================================================================
+import bcrypt from 'bcryptjs';
+import pool, { query } from '../../shared/db';
+import { redis, invalidateCache } from '../../shared/redis';
+import { AppError } from '../../shared/errorHandler';
+
+const USER_COLUMNS = `
+  id, name, email, phone, role, assigned_warehouse_ids, 
+  notification_preferences, is_active, created_at, updated_at
+`;
+
+export class UserService {
+  /**
+   * List users (password_hash is completely excluded)
+   */
+  async listUsers(filters: any) {
+    const { page, limit, role, warehouse_id, is_active, search, sort_by, sort_order } = filters;
+    const offset = (page - 1) * limit;
+
+    const conditions: string[] = [];
+    const params: any[] = [];
+    let idx = 1;
+
+    if (role) {
+      conditions.push(`role = $${idx}`);
+      params.push(role);
+      idx++;
+    }
+
+    if (is_active !== undefined) {
+      conditions.push(`is_active = $${idx}`);
+      params.push(is_active);
+      idx++;
+    }
+
+    if (warehouse_id) {
+      conditions.push(`$${idx}::uuid = ANY(assigned_warehouse_ids)`);
+      params.push(warehouse_id);
+      idx++;
+    }
+
+    if (search) {
+      conditions.push(`(name ILIKE $${idx} OR email ILIKE $${idx})`);
+      params.push(`%${search}%`);
+      idx++;
+    }
+
+    const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
+
+    const countSql = `SELECT COUNT(*) AS total FROM users ${whereClause};`;
+    const dataSql = `
+      SELECT ${USER_COLUMNS}
+      FROM users
+      ${whereClause}
+      ORDER BY ${sort_by} ${sort_order.toUpperCase()}
+      LIMIT $${idx} OFFSET $${idx + 1};
+    `;
+
+    params.push(limit, offset);
+
+    try {
+      const [countRes, dataRes] = await Promise.all([
+        query(countSql, params.slice(0, idx - 1)),
+        query(dataSql, params),
+      ]);
+
+      const total = parseInt(countRes.rows[0]?.total || '0', 10);
+      return { users: dataRes.rows, total };
+    } catch (err: any) {
+      if (err.code === '42P01') return { users: [], total: 0 };
+      throw err;
+    }
+  }
+
+  /**
+   * Get user detail + assigned warehouse names
+   */
+  async getUserById(id: string) {
+    try {
+      const sql = `SELECT ${USER_COLUMNS} FROM users WHERE id = $1;`;
+      const res = await query(sql, [id]);
+
+      if (res.rows.length === 0) {
+        throw new AppError(404, 'NOT_FOUND', 'User not found');
+      }
+
+      const user = res.rows[0];
+
+      // Fetch warehouse names if assigned
+      if (user.assigned_warehouse_ids && user.assigned_warehouse_ids.length > 0) {
+        const whSql = `SELECT id, name, code FROM warehouses WHERE id = ANY($1::uuid[]);`;
+        const whRes = await query(whSql, [user.assigned_warehouse_ids]).catch(() => ({ rows: [] }));
+        user.assigned_warehouses = whRes.rows;
+      } else {
+        user.assigned_warehouses = [];
+      }
+
+      return user;
+    } catch (err: any) {
+      if (err instanceof AppError) throw err;
+      if (err.code === '42P01') throw new AppError(404, 'NOT_FOUND', 'User not found');
+      throw err;
+    }
+  }
+
+  /**
+   * Update user details (Admin route)
+   */
+  async updateUser(id: string, currentAdminId: string, input: any) {
+    // Prevent self-role modification
+    if (id === currentAdminId && input.role !== undefined) {
+      throw new AppError(400, 'CANNOT_MODIFY_OWN_ROLE', 'Administrators cannot change their own role');
+    }
+
+    // Verify assigned warehouse IDs exist if updated
+    if (input.assigned_warehouse_ids && input.assigned_warehouse_ids.length > 0) {
+      const checkWh = await query(
+        `SELECT COUNT(*)::integer AS count FROM warehouses WHERE id = ANY($1::uuid[]) AND is_active = true`,
+        [input.assigned_warehouse_ids]
+      );
+      if (parseInt(checkWh.rows[0]?.count || '0', 10) !== input.assigned_warehouse_ids.length) {
+        throw new AppError(400, 'INVALID_WAREHOUSE_IDS', 'One or more assigned warehouse IDs do not exist');
+      }
+    }
+
+    const fields: string[] = [];
+    const values: any[] = [];
+    let idx = 1;
+
+    Object.entries(input).forEach(([key, val]) => {
+      if (val !== undefined) {
+        fields.push(`${key} = $${idx}`);
+        values.push(val);
+        idx++;
+      }
+    });
+
+    if (fields.length === 0) return this.getUserById(id);
+
+    fields.push(`updated_at = NOW()`);
+    values.push(id);
+
+    const sql = `
+      UPDATE users
+      SET ${fields.join(', ')}
+      WHERE id = $${idx}
+      RETURNING ${USER_COLUMNS};
+    `;
+
+    const res = await query(sql, values);
+    if (res.rows.length === 0) {
+      throw new AppError(404, 'NOT_FOUND', 'User not found');
+    }
+
+    return res.rows[0];
+  }
+
+  /**
+   * Deactivate user and purge active Redis sessions
+   */
+  async deactivateUser(id: string, currentAdminId: string) {
+    if (id === currentAdminId) {
+      throw new AppError(400, 'CANNOT_DEACTIVATE_SELF', 'You cannot deactivate your own administrative account');
+    }
+
+    const res = await query(
+      `UPDATE users SET is_active = false, updated_at = NOW() WHERE id = $1 RETURNING id;`,
+      [id]
+    );
+
+    if (res.rows.length === 0) {
+      throw new AppError(404, 'NOT_FOUND', 'User not found');
+    }
+
+    // Invalidate sessions in Redis
+    await invalidateCache(`session:${id}:*`);
+    await invalidateCache(`auth:${id}`);
+
+    return { message: 'User account deactivated and active sessions revoked' };
+  }
+
+  /**
+   * Update current user profile
+   */
+  async updateProfile(userId: string, input: any) {
+    const fields: string[] = [];
+    const values: any[] = [];
+    let idx = 1;
+
+    if (input.name !== undefined) {
+      fields.push(`name = $${idx}`);
+      values.push(input.name);
+      idx++;
+    }
+
+    if (input.phone !== undefined) {
+      fields.push(`phone = $${idx}`);
+      values.push(input.phone);
+      idx++;
+    }
+
+    if (input.notification_preferences !== undefined) {
+      fields.push(`notification_preferences = $${idx}`);
+      values.push(JSON.stringify(input.notification_preferences));
+      idx++;
+    }
+
+    if (fields.length === 0) return this.getUserById(userId);
+
+    fields.push(`updated_at = NOW()`);
+    values.push(userId);
+
+    const sql = `
+      UPDATE users
+      SET ${fields.join(', ')}
+      WHERE id = $${idx}
+      RETURNING ${USER_COLUMNS};
+    `;
+
+    const res = await query(sql, values);
+    if (res.rows.length === 0) {
+      throw new AppError(404, 'NOT_FOUND', 'User not found');
+    }
+
+    return res.rows[0];
+  }
+
+  /**
+   * Change user password with bcrypt verification and session invalidation
+   */
+  async changePassword(userId: string, currentPass: string, newPass: string) {
+    const userRes = await query(`SELECT id, password_hash FROM users WHERE id = $1;`, [userId]);
+    if (userRes.rows.length === 0) {
+      throw new AppError(404, 'NOT_FOUND', 'User not found');
+    }
+
+    const user = userRes.rows[0];
+
+    // Verify current password
+    if (user.password_hash) {
+      const isValid = await bcrypt.compare(currentPass, user.password_hash);
+      if (!isValid) {
+        throw new AppError(400, 'INVALID_CREDENTIALS', 'Incorrect current password');
+      }
+    }
+
+    // Hash new password
+    const newHash = await bcrypt.hash(newPass, 10);
+
+    await query(
+      `UPDATE users SET password_hash = $1, updated_at = NOW() WHERE id = $2;`,
+      [newHash, userId]
+    );
+
+    // Invalidate other active sessions
+    await invalidateCache(`session:${userId}:*`);
+
+    return { message: 'Password successfully updated. All other sessions terminated.' };
+  }
+}
+
+export const userService = new UserService();
+
+
+
+================================================================================
+===== SERVICE: Stock-Sense--nithin-backend\Stock-Sense--nithin-backend\src\api\services\warehouse.service.ts =====
+================================================================================
+import pool, { query } from '../../shared/db';
+import { AppError } from '../../shared/errorHandler';
+import { WarehouseCreateInput, WarehouseUpdateInput } from '../schemas/warehouse.schema';
+import { AuthenticatedUser } from '../../core/middleware/rbac';
+
+export class WarehouseService {
+  /**
+   * List active warehouses. Filters by user assigned warehouses unless ADMIN.
+   */
+  async listWarehouses(user?: AuthenticatedUser) {
+    try {
+      let sql = `SELECT * FROM warehouses WHERE is_active = true`;
+      const params: any[] = [];
+
+      if (user && user.role !== 'ADMIN' && user.assigned_warehouses && user.assigned_warehouses.length > 0) {
+        sql += ` AND id = ANY($1::uuid[])`;
+        params.push(user.assigned_warehouses);
+      }
+
+      sql += ` ORDER BY name ASC;`;
+      const res = await query(sql, params);
+      return res.rows;
+    } catch (err: any) {
+      if (err.code === '42P01') return [];
+      throw err;
+    }
+  }
+
+  /**
+   * Create warehouse and auto-create default virtual locations in a transaction
+   */
+  async createWarehouse(input: WarehouseCreateInput, userId: string) {
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+
+      // 1. Insert warehouse
+      const whSql = `
+        INSERT INTO warehouses (name, code, address, created_by)
+        VALUES ($1, $2, $3, $4)
+        RETURNING *;
+      `;
+      const whRes = await client.query(whSql, [
+        input.name,
+        input.code.toUpperCase(),
+        input.address || null,
+        userId,
+      ]);
+      const warehouse = whRes.rows[0];
+
+      // 2. Auto-create default locations
+      const defaultLocations = [
+        { name: 'Receiving Dock', type: 'internal', barcode: `${warehouse.code}-RCV` },
+        { name: 'Shipping Dock', type: 'internal', barcode: `${warehouse.code}-SHP` },
+        { name: 'Main Storage', type: 'internal', barcode: `${warehouse.code}-MAIN` },
+      ];
+
+      for (const loc of defaultLocations) {
+        const locSql = `
+          INSERT INTO locations (warehouse_id, name, location_type, barcode)
+          VALUES ($1, $2, $3, $4);
+        `;
+        await client.query(locSql, [warehouse.id, loc.name, loc.type, loc.barcode]);
+      }
+
+      await client.query('COMMIT');
+      return warehouse;
+    } catch (err) {
+      await client.query('ROLLBACK');
+      throw err;
+    } finally {
+      client.release();
+    }
+  }
+
+  /**
+   * Update warehouse details
+   */
+  async updateWarehouse(id: string, input: WarehouseUpdateInput) {
+    const fields: string[] = [];
+    const values: any[] = [];
+    let idx = 1;
+
+    Object.entries(input).forEach(([key, val]) => {
+      if (val !== undefined) {
+        fields.push(`${key} = $${idx}`);
+        values.push(key === 'code' && typeof val === 'string' ? val.toUpperCase() : val);
+        idx++;
+      }
+    });
+
+    if (fields.length === 0) {
+      const existing = await query(`SELECT * FROM warehouses WHERE id = $1`, [id]);
+      if (existing.rows.length === 0) throw new AppError(404, 'NOT_FOUND', 'Warehouse not found');
+      return existing.rows[0];
+    }
+
+    fields.push(`updated_at = NOW()`);
+    values.push(id);
+
+    const sql = `
+      UPDATE warehouses
+      SET ${fields.join(', ')}
+      WHERE id = $${idx}
+      RETURNING *;
+    `;
+
+    const res = await query(sql, values);
+    if (res.rows.length === 0) {
+      throw new AppError(404, 'NOT_FOUND', 'Warehouse not found');
+    }
+
+    return res.rows[0];
+  }
+}
+
+export const warehouseService = new WarehouseService();
+
+
+
+================================================================================
+===== ENTRY: Stock-Sense--nithin-backend\Stock-Sense--nithin-backend\src\app.ts =====
+================================================================================
+import express from 'express';
+import cors from 'cors';
+import helmet from 'helmet';
+import morgan from 'morgan';
+import dotenv from 'dotenv';
+import path from 'path';
+import swaggerUi from 'swagger-ui-express';
+import YAML from 'yamljs';
+
+import { AppError, handleDbError } from './shared/errorHandler';
+import { sendError } from './shared/response';
+
+// Route Modules
+import productRoutes from './api/routes/product.routes';
+import categoryRoutes from './api/routes/category.routes';
+import warehouseRoutes from './api/routes/warehouse.routes';
+import locationRoutes from './api/routes/location.routes';
+import partnerRoutes from './api/routes/partner.routes';
+import dashboardRoutes from './api/routes/dashboard.routes';
+import userRoutes from './api/routes/user.routes';
+import profileRoutes from './api/routes/profile.routes';
+import settingsRoutes from './api/routes/settings.routes';
+import searchRoutes from './api/routes/search.routes';
+
+dotenv.config();
+
+const app = express();
+
+// Security & Middlewares
+app.use(
+  helmet({
+    contentSecurityPolicy: false, // Allows Swagger UI to render smoothly
+  })
+);
+app.use(cors());
+app.use(express.json({ limit: '10mb' }));
+if (process.env.NODE_ENV !== 'test') {
+  app.use(morgan('dev'));
+}
+
+// ðŸ“š Swagger / OpenAPI Documentation Route
+try {
+  const swaggerDocument = YAML.load(path.join(__dirname, 'docs/swagger.yaml'));
+  app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(swaggerDocument));
+} catch (err) {
+  console.warn('âš ï¸ Swagger doc load failed:', err);
+}
+
+// Health Check
+app.get('/health', (req, res) => {
+  res.status(200).json({
+    status: 'ok',
+    service: 'WMS Backend CRUD API (Member 3 - Data Layer)',
+    docs: '/api-docs',
+    timestamp: new Date().toISOString(),
+  });
+});
+
+// Mounted Routes
+app.use('/api/v1/products', productRoutes);
+app.use('/api/v1/categories', categoryRoutes);
+app.use('/api/v1/warehouses', warehouseRoutes);
+app.use('/api/v1/locations', locationRoutes);
+app.use('/api/v1/partners', partnerRoutes);
+app.use('/api/v1/dashboard', dashboardRoutes);
+app.use('/api/v1/users', userRoutes);
+app.use('/api/v1/profile', profileRoutes);
+app.use('/api/v1/settings', settingsRoutes);
+app.use('/api/v1', searchRoutes);
+
+// Global 404 Handler
+app.use((req, res) => {
+  return sendError(res, 'NOT_FOUND', `Route ${req.method} ${req.originalUrl} not found`, 404);
+});
+
+// Global Error Handler
+app.use((err: any, req: express.Request, res: express.Response, next: express.NextFunction) => {
+  if (err instanceof AppError) {
+    return sendError(res, err.code, err.message, err.statusCode, err.details);
+  }
+
+  if (err && err.code && typeof err.code === 'string' && err.code.length === 5) {
+    const dbAppError = handleDbError(err);
+    return sendError(res, dbAppError.code, dbAppError.message, dbAppError.statusCode, dbAppError.details);
+  }
+
+  console.error('[Unhandled Server Exception]:', err);
+  return sendError(res, 'INTERNAL_SERVER_ERROR', 'An unexpected internal server error occurred', 500);
+});
+
+export default app;
+
+
+
+================================================================================
+===== ENTRY: Stock-Sense--nithin-backend\Stock-Sense--nithin-backend\src\server.ts =====
+================================================================================
+import app from './app';
+import { redis } from './shared/redis';
+import { logger } from './shared/logger';
+
+const PORT = parseInt(process.env.PORT || '3000', 10);
+
+const startServer = async () => {
+  try {
+    // Connect to Redis
+    await redis.connect().catch((err) => {
+      logger.warn('âš ï¸ Redis not reachable right now, continuing without cache:', err.message);
+    });
+
+    app.listen(PORT, '0.0.0.0', () => {
+      logger.info(`ðŸš€ WMS API Data Layer running on port ${PORT}`);
+      logger.info(`ðŸ“¡ Health Check available at: http://localhost:${PORT}/health`);
+    });
+  } catch (error) {
+    logger.error('âŒ Failed to start server:', error);
+    process.exit(1);
+  }
+};
+
+startServer();
+
+
+
+================================================================================
+===== ROUTE: Stock-Sense--nithin-backend\Stock-Sense--nithin-backend\src\api\routes\category.routes.ts =====
+================================================================================
+import { Router } from 'express';
+import { categoryController } from '../controllers/category.controller';
+import { validateRequest } from '../middleware/validate';
+import { requireRole } from '../../core/middleware/rbac';
+import {
+  categoryCreateSchema,
+  categoryUpdateSchema,
+  categoryQuerySchema,
+  categoryIdParamSchema,
+} from '../schemas/category.schema';
+
+const router = Router();
+
+// GET /api/v1/categories - Flat list with parent references + optional counts
+router.get(
+  '/',
+  validateRequest({ query: categoryQuerySchema }),
+  categoryController.list
+);
+
+// GET /api/v1/categories/:id - Detail + direct children + product count
+router.get(
+  '/:id',
+  validateRequest({ params: categoryIdParamSchema }),
+  categoryController.getById
+);
+
+// POST /api/v1/categories - Create category (INVENTORY_MANAGER)
+router.post(
+  '/',
+  requireRole(['INVENTORY_MANAGER', 'ADMIN']),
+  validateRequest({ body: categoryCreateSchema }),
+  categoryController.create
+);
+
+// PATCH /api/v1/categories/:id - Update category with circular check (INVENTORY_MANAGER)
+router.patch(
+  '/:id',
+  requireRole(['INVENTORY_MANAGER', 'ADMIN']),
+  validateRequest({ params: categoryIdParamSchema, body: categoryUpdateSchema }),
+  categoryController.update
+);
+
+// DELETE /api/v1/categories/:id - Delete check (0 products only) (ADMIN)
+router.delete(
+  '/:id',
+  requireRole(['ADMIN']),
+  validateRequest({ params: categoryIdParamSchema }),
+  categoryController.delete
+);
+
+export default router;
+
+
+
+================================================================================
+===== ROUTE: Stock-Sense--nithin-backend\Stock-Sense--nithin-backend\src\api\routes\dashboard.routes.ts =====
+================================================================================
+import { Router } from 'express';
+import { dashboardController } from '../controllers/dashboard.controller';
+import { validateRequest } from '../middleware/validate';
+import { requireRole } from '../../core/middleware/rbac';
+import {
+  dashboardKpiQuerySchema,
+  recentOperationsQuerySchema,
+  lowStockQuerySchema,
+  movementTrendQuerySchema,
+} from '../schemas/dashboard.schema';
+
+const router = Router();
+
+// GET /api/v1/dashboard/kpis - 30s Redis cached metrics (VIEWER+)
+router.get(
+  '/kpis',
+  requireRole(['VIEWER', 'INVENTORY_MANAGER', 'ADMIN']),
+  validateRequest({ query: dashboardKpiQuerySchema }),
+  dashboardController.getKpis
+);
+
+// GET /api/v1/dashboard/recent-operations - Latest 10 stock operations
+router.get(
+  '/recent-operations',
+  requireRole(['VIEWER', 'INVENTORY_MANAGER', 'ADMIN']),
+  validateRequest({ query: recentOperationsQuerySchema }),
+  dashboardController.getRecentOperations
+);
+
+// GET /api/v1/dashboard/low-stock - Products below reorder threshold
+router.get(
+  '/low-stock',
+  requireRole(['VIEWER', 'INVENTORY_MANAGER', 'ADMIN']),
+  validateRequest({ query: lowStockQuerySchema }),
+  dashboardController.getLowStock
+);
+
+// GET /api/v1/dashboard/movement-trend - Movement trends by date for charts
+router.get(
+  '/movement-trend',
+  requireRole(['VIEWER', 'INVENTORY_MANAGER', 'ADMIN']),
+  validateRequest({ query: movementTrendQuerySchema }),
+  dashboardController.getMovementTrend
+);
+
+export default router;
+
+
+
+================================================================================
+===== ROUTE: Stock-Sense--nithin-backend\Stock-Sense--nithin-backend\src\api\routes\location.routes.ts =====
+================================================================================
+import { Router } from 'express';
+import { locationController } from '../controllers/location.controller';
+import { validateRequest } from '../middleware/validate';
+import { requireRole } from '../../core/middleware/rbac';
+import {
+  locationCreateSchema,
+  locationUpdateSchema,
+  locationQuerySchema,
+  locationIdParamSchema,
+} from '../schemas/location.schema';
+
+const router = Router();
+
+// GET /api/v1/locations?warehouse_id=... - List locations with stock summaries
+router.get(
+  '/',
+  validateRequest({ query: locationQuerySchema }),
+  locationController.list
+);
+
+// GET /api/v1/locations/:id - Location detail + children + stock summary
+router.get(
+  '/:id',
+  validateRequest({ params: locationIdParamSchema }),
+  locationController.getById
+);
+
+// POST /api/v1/locations - Create location with hierarchy checks (INVENTORY_MANAGER)
+router.post(
+  '/',
+  requireRole(['INVENTORY_MANAGER', 'ADMIN']),
+  validateRequest({ body: locationCreateSchema }),
+  locationController.create
+);
+
+// PATCH /api/v1/locations/:id - Update location (INVENTORY_MANAGER)
+router.patch(
+  '/:id',
+  requireRole(['INVENTORY_MANAGER', 'ADMIN']),
+  validateRequest({ params: locationIdParamSchema, body: locationUpdateSchema }),
+  locationController.update
+);
+
+export default router;
+
+
+
+================================================================================
+===== ROUTE: Stock-Sense--nithin-backend\Stock-Sense--nithin-backend\src\api\routes\partner.routes.ts =====
+================================================================================
+import { Router } from 'express';
+import { partnerController } from '../controllers/partner.controller';
+import { validateRequest } from '../middleware/validate';
+import { requireRole } from '../../core/middleware/rbac';
+import {
+  partnerCreateSchema,
+  partnerUpdateSchema,
+  partnerQuerySchema,
+  partnerIdParamSchema,
+} from '../schemas/partner.schema';
+
+const router = Router();
+
+// GET /api/v1/partners - Paginated list with type & name search
+router.get(
+  '/',
+  validateRequest({ query: partnerQuerySchema }),
+  partnerController.list
+);
+
+// GET /api/v1/partners/:id - Partner detail + operation stats
+router.get(
+  '/:id',
+  validateRequest({ params: partnerIdParamSchema }),
+  partnerController.getById
+);
+
+// POST /api/v1/partners - Create partner (INVENTORY_MANAGER)
+router.post(
+  '/',
+  requireRole(['INVENTORY_MANAGER', 'ADMIN']),
+  validateRequest({ body: partnerCreateSchema }),
+  partnerController.create
+);
+
+// PATCH /api/v1/partners/:id - Update partner (INVENTORY_MANAGER)
+router.patch(
+  '/:id',
+  requireRole(['INVENTORY_MANAGER', 'ADMIN']),
+  validateRequest({ params: partnerIdParamSchema, body: partnerUpdateSchema }),
+  partnerController.update
+);
+
+// DELETE /api/v1/partners/:id - Soft delete with active ops check (ADMIN)
+router.delete(
+  '/:id',
+  requireRole(['ADMIN']),
+  validateRequest({ params: partnerIdParamSchema }),
+  partnerController.delete
+);
+
+export default router;
+
+
+
+================================================================================
+===== ROUTE: Stock-Sense--nithin-backend\Stock-Sense--nithin-backend\src\api\routes\product.routes.ts =====
+================================================================================
+import { Router } from 'express';
+import { productController } from '../controllers/product.controller';
+import { validateRequest } from '../middleware/validate';
+import { requireRole } from '../../core/middleware/rbac';
+import {
+  productCreateSchema,
+  productUpdateSchema,
+  productQuerySchema,
+  productBulkCreateSchema,
+  productIdParamSchema,
+} from '../schemas/product.schema';
+
+const router = Router();
+
+// GET /api/v1/products - List with pagination, filters, sorting
+router.get(
+  '/',
+  validateRequest({ query: productQuerySchema }),
+  productController.list
+);
+
+// POST /api/v1/products/bulk - Bulk import (Max 500 items, wrapped in transaction)
+router.post(
+  '/bulk',
+  requireRole(['INVENTORY_MANAGER', 'ADMIN']),
+  validateRequest({ body: productBulkCreateSchema }),
+  productController.bulkCreate
+);
+
+// GET /api/v1/products/:id - Single Product detail + stock per location
+router.get(
+  '/:id',
+  validateRequest({ params: productIdParamSchema }),
+  productController.getById
+);
+
+// POST /api/v1/products - Create Product + initial stock trigger
+router.post(
+  '/',
+  requireRole(['INVENTORY_MANAGER', 'ADMIN']),
+  validateRequest({ body: productCreateSchema }),
+  productController.create
+);
+
+// PATCH /api/v1/products/:id - Update product
+router.patch(
+  '/:id',
+  requireRole(['INVENTORY_MANAGER', 'ADMIN']),
+  validateRequest({ params: productIdParamSchema, body: productUpdateSchema }),
+  productController.update
+);
+
+// DELETE /api/v1/products/:id - Soft Delete (checks active stock)
+router.delete(
+  '/:id',
+  requireRole(['ADMIN']),
+  validateRequest({ params: productIdParamSchema }),
+  productController.delete
+);
+
+export default router;
+
+
+
+================================================================================
+===== ROUTE: Stock-Sense--nithin-backend\Stock-Sense--nithin-backend\src\api\routes\profile.routes.ts =====
+================================================================================
+import { Router } from 'express';
+import { profileController } from '../controllers/profile.controller';
+import { validateRequest } from '../middleware/validate';
+import { requireRole } from '../../core/middleware/rbac';
+import {
+  profileUpdateSchema,
+  changePasswordSchema,
+} from '../schemas/user.schema';
+
+const router = Router();
+
+// All profile routes require authentication
+router.use(requireRole(['ADMIN', 'INVENTORY_MANAGER', 'VIEWER']));
+
+// GET /api/v1/profile - Current user profile
+router.get('/', profileController.getProfile);
+
+// PATCH /api/v1/profile - Update name/phone/notifications
+router.patch('/', validateRequest({ body: profileUpdateSchema }), profileController.updateProfile);
+
+// POST /api/v1/profile/change-password - Change password & invalidate other sessions
+router.post(
+  '/change-password',
+  validateRequest({ body: changePasswordSchema }),
+  profileController.changePassword
+);
+
+export default router;
+
+
+
+================================================================================
+===== ROUTE: Stock-Sense--nithin-backend\Stock-Sense--nithin-backend\src\api\routes\search.routes.ts =====
+================================================================================
+import { Router } from 'express';
+import { searchController } from '../controllers/search.controller';
+import { validateRequest } from '../middleware/validate';
+import { globalSearchQuerySchema } from '../schemas/search.schema';
+
+const router = Router();
+
+// GET /api/v1/search?q=... - Global top-bar search
+router.get(
+  '/search',
+  validateRequest({ query: globalSearchQuerySchema }),
+  searchController.globalSearch
+);
+
+// GET /api/v1/units-of-measure - Static UoM list
+router.get('/units-of-measure', searchController.getUnitsOfMeasure);
+
+// GET /api/v1/references/operation-statuses - Status transition rules
+router.get('/references/operation-statuses', searchController.getOperationStatuses);
+
+// GET /api/v1/references/location-types - Supported location types
+router.get('/references/location-types', searchController.getLocationTypes);
+
+export default router;
+
+
+
+================================================================================
+===== ROUTE: Stock-Sense--nithin-backend\Stock-Sense--nithin-backend\src\api\routes\settings.routes.ts =====
+================================================================================
+import { Router } from 'express';
+import { settingsController } from '../controllers/settings.controller';
+import { validateRequest } from '../middleware/validate';
+import { requireRole } from '../../core/middleware/rbac';
+import { settingsUpdateSchema } from '../schemas/user.schema';
+
+const router = Router();
+
+// GET /api/v1/settings - System settings (ADMIN only)
+router.get('/', requireRole(['ADMIN']), settingsController.getSettings);
+
+// PATCH /api/v1/settings - Update settings (ADMIN only)
+router.patch(
+  '/',
+  requireRole(['ADMIN']),
+  validateRequest({ body: settingsUpdateSchema }),
+  settingsController.updateSettings
+);
+
+export default router;
+
+
+
+================================================================================
+===== ROUTE: Stock-Sense--nithin-backend\Stock-Sense--nithin-backend\src\api\routes\user.routes.ts =====
+================================================================================
+import { Router } from 'express';
+import { userController } from '../controllers/user.controller';
+import { validateRequest } from '../middleware/validate';
+import { requireRole } from '../../core/middleware/rbac';
+import {
+  userQuerySchema,
+  userUpdateSchema,
+  userIdParamSchema,
+} from '../schemas/user.schema';
+
+const router = Router();
+
+// GET /api/v1/users - List users (ADMIN only, password_hash stripped)
+router.get(
+  '/',
+  requireRole(['ADMIN']),
+  validateRequest({ query: userQuerySchema }),
+  userController.list
+);
+
+// GET /api/v1/users/:id - User detail (ADMIN or Self)
+router.get(
+  '/:id',
+  requireRole(['ADMIN', 'INVENTORY_MANAGER', 'VIEWER']),
+  validateRequest({ params: userIdParamSchema }),
+  userController.getById
+);
+
+// PATCH /api/v1/users/:id - Update user role/profile (ADMIN only)
+router.patch(
+  '/:id',
+  requireRole(['ADMIN']),
+  validateRequest({ params: userIdParamSchema, body: userUpdateSchema }),
+  userController.update
+);
+
+// POST /api/v1/users/:id/deactivate - Deactivate user & purge sessions (ADMIN only)
+router.post(
+  '/:id/deactivate',
+  requireRole(['ADMIN']),
+  validateRequest({ params: userIdParamSchema }),
+  userController.deactivate
+);
+
+export default router;
+
+
+
+================================================================================
+===== ROUTE: Stock-Sense--nithin-backend\Stock-Sense--nithin-backend\src\api\routes\warehouse.routes.ts =====
+================================================================================
+import { Router } from 'express';
+import { warehouseController } from '../controllers/warehouse.controller';
+import { validateRequest } from '../middleware/validate';
+import { requireRole } from '../../core/middleware/rbac';
+import {
+  warehouseCreateSchema,
+  warehouseUpdateSchema,
+  warehouseIdParamSchema,
+} from '../schemas/warehouse.schema';
+
+const router = Router();
+
+// GET /api/v1/warehouses - List all active (filtered by user access)
+router.get('/', requireRole(['VIEWER', 'INVENTORY_MANAGER', 'ADMIN']), warehouseController.list);
+
+// POST /api/v1/warehouses - Create warehouse + auto-create docks (ADMIN)
+router.post(
+  '/',
+  requireRole(['ADMIN']),
+  validateRequest({ body: warehouseCreateSchema }),
+  warehouseController.create
+);
+
+// PATCH /api/v1/warehouses/:id - Update warehouse (ADMIN)
+router.patch(
+  '/:id',
+  requireRole(['ADMIN']),
+  validateRequest({ params: warehouseIdParamSchema, body: warehouseUpdateSchema }),
+  warehouseController.update
+);
+
+export default router;
+
+
+

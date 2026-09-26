@@ -1,0 +1,27 @@
+﻿version: "3.9"
+services:
+  db:
+    image: postgres:16-alpine
+    container_name: stocksense-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: stocksense
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: stocksense2026
+    ports:
+      - "5432:5432"
+    volumes:
+      - ./db/initdb:/docker-entrypoint-initdb.d
+      - pgdata:/var/lib/postgresql/data
+    command: >
+      postgres
+        -c shared_preload_libraries=pg_stat_statements
+        -c log_statement=all
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  pgdata:
