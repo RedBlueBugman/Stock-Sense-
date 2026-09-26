@@ -1,91 +1,138 @@
-import { PrismaClient, Role, LocationType, OperationType, OperationStatus, MoveStatus, PartnerType } from "@prisma/client";
+﻿import { PrismaClient } from "@prisma/client";
 import bcrypt from "bcryptjs";
 
 const prisma = new PrismaClient();
 
 async function main() {
-  console.log("🌱 Starting StockSense database seeding...");
-  await prisma.stockMove.deleteMany();
-  await prisma.stockReservation.deleteMany();
-  await prisma.stockOperation.deleteMany();
-  await prisma.productLot.deleteMany();
-  await prisma.reorderRule.deleteMany();
-  await prisma.alert.deleteMany();
-  await prisma.product.deleteMany();
-  await prisma.productCategory.deleteMany();
-  await prisma.location.deleteMany();
-  await prisma.warehouse.deleteMany();
-  await prisma.partner.deleteMany();
-  await prisma.user.deleteMany();
+  console.log("🌱 Seeding local SQLite database with demo catalog...");
 
-  console.log("👤 Creating system users...");
-  const adminPass = await bcrypt.hash("Admin@123", 10);
-  const managerPass = await bcrypt.hash("Manager@123", 10);
-  const workerPass = await bcrypt.hash("Worker@123", 10);
-
-  const admin = await prisma.user.create({ data: { name: "System Admin", email: "admin@stocksense.local", passwordHash: adminPass, role: Role.ADMIN } });
-  const manager = await prisma.user.create({ data: { name: "Inventory Manager", email: "manager@stocksense.local", passwordHash: managerPass, role: Role.INVENTORY_MANAGER } });
-  const worker = await prisma.user.create({ data: { name: "Floor Worker", email: "worker@stocksense.local", passwordHash: workerPass, role: Role.WAREHOUSE_WORKER } });
-
-  console.log("🏭 Creating warehouses and virtual/physical locations...");
-  const mainWH = await prisma.warehouse.create({ data: { name: "Main Distribution Center", code: "WH-MAIN", address: "100 Logistics Blvd, Warehouse District" } });
-  await prisma.user.updateMany({ data: { assignedWarehouseIds: [mainWH.id] } });
-
-  const vendorLoc = await prisma.location.create({ data: { warehouseId: mainWH.id, name: "Virtual Vendor Source", locationType: LocationType.vendor } });
-  const customerLoc = await prisma.location.create({ data: { warehouseId: mainWH.id, name: "Virtual Customer Dest", locationType: LocationType.customer } });
-  const lossLoc = await prisma.location.create({ data: { warehouseId: mainWH.id, name: "Virtual Inventory Loss", locationType: LocationType.loss } });
-  const prodLoc = await prisma.location.create({ data: { warehouseId: mainWH.id, name: "Virtual Production Floor", locationType: LocationType.production } });
-
-  const receivingDock = await prisma.location.create({ data: { warehouseId: mainWH.id, name: "Receiving Dock", barcode: "LOC-WH1-RECV", locationType: LocationType.internal } });
-  const rackA = await prisma.location.create({ data: { warehouseId: mainWH.id, name: "Storage Rack A", barcode: "LOC-WH1-RACK-A", locationType: LocationType.internal } });
-  const rackB = await prisma.location.create({ data: { warehouseId: mainWH.id, name: "Storage Rack B", barcode: "LOC-WH1-RACK-B", locationType: LocationType.internal } });
-  const shippingDock = await prisma.location.create({ data: { warehouseId: mainWH.id, name: "Shipping Dock", barcode: "LOC-WH1-SHIP", locationType: LocationType.internal } });
-
-  console.log("🏭 Creating warehouses and virtual/physical locations...");
-  const mainWH = await prisma.warehouse.create({ data: { name: "Main Distribution Center", code: "WH-MAIN", address: "100 Logistics Blvd, Warehouse District" } });
-  await prisma.user.updateMany({ data: { assignedWarehouseIds: [mainWH.id] } });
-
-  const vendorLoc = await prisma.location.create({ data: { warehouseId: mainWH.id, name: "Virtual Vendor Source", locationType: LocationType.vendor } });
-  const customerLoc = await prisma.location.create({ data: { warehouseId: mainWH.id, name: "Virtual Customer Dest", locationType: LocationType.customer } });
-  const lossLoc = await prisma.location.create({ data: { warehouseId: mainWH.id, name: "Virtual Inventory Loss", locationType: LocationType.loss } });
-  const prodLoc = await prisma.location.create({ data: { warehouseId: mainWH.id, name: "Virtual Production Floor", locationType: LocationType.production } });
-
-  const receivingDock = await prisma.location.create({ data: { warehouseId: mainWH.id, name: "Receiving Dock", barcode: "LOC-WH1-RECV", locationType: LocationType.internal } });
-  const rackA = await prisma.location.create({ data: { warehouseId: mainWH.id, name: "Storage Rack A", barcode: "LOC-WH1-RACK-A", locationType: LocationType.internal } });
-  const rackB = await prisma.location.create({ data: { warehouseId: mainWH.id, name: "Storage Rack B", barcode: "LOC-WH1-RACK-B", locationType: LocationType.internal } });
-  const shippingDock = await prisma.location.create({ data: { warehouseId: mainWH.id, name: "Shipping Dock", barcode: "LOC-WH1-SHIP", locationType: LocationType.internal } });
-
-  console.log("📦 Creating categories, products, partners, and initial baseline moves...");
-  const rawCat = await prisma.productCategory.create({ data: { name: "Raw Materials" } });
-  const finishedCat = await prisma.productCategory.create({ data: { name: "Finished Goods" } });
-
-  const steel = await prisma.product.create({ data: { name: "Steel Rods 10mm", sku: "RAW-STL-001", barcode: "8901001001", categoryId: rawCat.id, unitOfMeasure: "kg", reorderMin: 50, reorderMax: 500, reorderQty: 200 } });
-  const chair = await prisma.product.create({ data: { name: "Ergonomic Office Chair", sku: "FG-CHR-001", barcode: "8901001002", categoryId: finishedCat.id, unitOfMeasure: "pcs", reorderMin: 10, reorderMax: 100, reorderQty: 50 } });
-
-  const supplier = await prisma.partner.create({ data: { name: "Apex Steel Supplies Ltd", type: PartnerType.supplier, email: "sales@apexsteel.local", phone: "+1-800-555-0199" } });
-  const customer = await prisma.partner.create({ data: { name: "Global Tech Offices Inc", type: PartnerType.customer, email: "procure@globaltech.local", phone: "+1-800-555-0244" } });
-
-  const initialReceipt = await prisma.stockOperation.create({
-    data: {
-      referenceCode: "REC/" + new Date().getFullYear() + "/0001",
-      operationType: OperationType.receipt,
-      status: OperationStatus.done,
-      sourceLocationId: vendorLoc.id,
-      destinationLocationId: rackA.id,
-      partnerId: supplier.id,
-      createdById: admin.id,
-      completedDate: new Date(),
-      notes: "Initial baseline stock provisioning",
-      moves: {
-        create: [
-          { productId: steel.id, quantity: 150, unitOfMeasure: "kg", sourceLocationId: vendorLoc.id, destinationLocationId: rackA.id, status: MoveStatus.done },
-          { productId: chair.id, quantity: 45, unitOfMeasure: "pcs", sourceLocationId: vendorLoc.id, destinationLocationId: rackA.id, status: MoveStatus.done },
-        ],
-      },
+  // 1. Admin User
+  const passwordHash = await bcrypt.hash("admin123", 10);
+  await prisma.user.upsert({
+    where: { email: "admin@stocksense.local" },
+    update: {},
+    create: {
+      name: "Warehouse Administrator",
+      email: "admin@stocksense.local",
+      phone: "+919000000001",
+      passwordHash,
+      role: "ADMIN",
     },
   });
 
-  console.log("✅ Database seeding completed successfully!");
+  // 2. Warehouses
+  const mainWh = await prisma.warehouse.upsert({
+    where: { code: "HYD-01" },
+    update: {},
+    create: { name: "Hyderabad Main Warehouse", code: "HYD-01", address: "Hyderabad, Telangana" },
+  });
+
+  const virtWh = await prisma.warehouse.upsert({
+    where: { code: "VIRT-01" },
+    update: {},
+    create: { name: "Virtual Operations Warehouse", code: "VIRT-01", address: "System Virtual" },
+  });
+
+  // 3. Locations
+  const locMain = await prisma.location.upsert({
+    where: { barcode: "LOC-HYD-MAIN" },
+    update: {},
+    create: { warehouseId: mainWh.id, name: "Main Store", barcode: "LOC-HYD-MAIN", locationType: "internal" },
+  });
+
+  const locRackA = await prisma.location.upsert({
+    where: { barcode: "LOC-HYD-RACK-A" },
+    update: {},
+    create: { warehouseId: mainWh.id, name: "Rack A", barcode: "LOC-HYD-RACK-A", locationType: "internal" },
+  });
+
+  const locVendor = await prisma.location.upsert({
+    where: { barcode: "LOC-VENDOR" },
+    update: {},
+    create: { warehouseId: virtWh.id, name: "Virtual Vendor Source", barcode: "LOC-VENDOR", locationType: "vendor" },
+  });
+
+  const locCustomer = await prisma.location.upsert({
+    where: { barcode: "LOC-CUSTOMER" },
+    update: {},
+    create: { warehouseId: virtWh.id, name: "Virtual Customer Dest", barcode: "LOC-CUSTOMER", locationType: "customer" },
+  });
+
+  const locLoss = await prisma.location.upsert({
+    where: { barcode: "LOC-LOSS" },
+    update: {},
+    create: { warehouseId: virtWh.id, name: "Virtual Loss", barcode: "LOC-LOSS", locationType: "loss" },
+  });
+
+  // 4. Products Catalog
+  const products = [
+    { name: "Wireless Mouse", sku: "ELEC-MOUSE-001", barcode: "890000000001", uom: "pcs", min: 20, max: 100, qty: 50 },
+    { name: "Mechanical Keyboard", sku: "ELEC-KEY-001", barcode: "890000000002", uom: "pcs", min: 10, max: 50, qty: 25 },
+    { name: "USB-C Cable", sku: "ELEC-CABLE-001", barcode: "890000000003", uom: "pcs", min: 25, max: 150, qty: 75 },
+    { name: "27-inch Monitor", sku: "ELEC-MON-001", barcode: "890000000004", uom: "pcs", min: 5, max: 25, qty: 10 },
+    { name: "Safety Helmet", sku: "SAFE-HELMET-001", barcode: "890000000008", uom: "pcs", min: 15, max: 100, qty: 40 },
+    { name: "Safety Gloves", sku: "SAFE-GLOVE-001", barcode: "890000000009", uom: "pair", min: 20, max: 150, qty: 60 },
+  ];
+
+  for (const item of products) {
+    await prisma.product.upsert({
+      where: { sku: item.sku },
+      update: {},
+      create: {
+        name: item.name,
+        sku: item.sku,
+        barcode: item.barcode,
+        unitOfMeasure: item.uom,
+        reorderMin: item.min,
+        reorderMax: item.max,
+        reorderQty: item.qty,
+      },
+    });
+  }
+
+  // 5. Initial Demo Receipt Operation (60 Wireless Mice)
+  const mouse = await prisma.product.findUnique({ where: { sku: "ELEC-MOUSE-001" } });
+  if (mouse) {
+    const existingOp = await prisma.stockOperation.findUnique({ where: { referenceCode: "REC-2026-001" } });
+    if (!existingOp) {
+      await prisma.stockOperation.create({
+        data: {
+          referenceCode: "REC-2026-001",
+          operationType: "receipt",
+          status: "done",
+          sourceLocationId: locVendor.id,
+          destinationLocationId: locMain.id,
+          scheduledDate: new Date(),
+          completedDate: new Date(),
+          moves: {
+            create: {
+              productId: mouse.id,
+              quantity: 60,
+              unitOfMeasure: "pcs",
+              sourceLocationId: locVendor.id,
+              destinationLocationId: locMain.id,
+              status: "done",
+            },
+          },
+        },
+      });
+    }
+
+    // Demo Alert
+    await prisma.alert.create({
+      data: {
+        type: "low_stock",
+        productId: mouse.id,
+        warehouseId: mainWh.id,
+        message: "Wireless Mouse stock level is approaching reorder threshold.",
+        priority: "medium",
+      },
+    });
+  }
+
+  console.log("✅ Local SQLite database successfully seeded.");
 }
 
-main().catch((e) => { console.error("❌ Seeding error:", e); process.exit(1); }).finally(async () => { await prisma.$disconnect(); });
+main()
+  .catch((e) => console.error("❌ Seeding failed:", e))
+  .finally(() => prisma.$disconnect());

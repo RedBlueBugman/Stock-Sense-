@@ -1,0 +1,9 @@
+# Environment / secrets
+.env
+
+# PostgreSQL backups
+backup/*.dump
+
+# OS
+.DS_Store
+Thumbs.db

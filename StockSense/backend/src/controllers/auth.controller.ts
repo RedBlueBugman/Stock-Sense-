@@ -2,81 +2,156 @@ import { Request, Response, NextFunction } from "express";
 import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
 import { z } from "zod";
-import { Role } from "@prisma/client";
-import { prisma } from "../utils/prisma";
+import prisma from "../utils/prisma";
+import { AppError } from "../utils/errorHandler";
+import { sendSuccess } from "../utils/response";
 import { env } from "../config/env";
-import { AppError } from "../middleware/errorHandler";
-import { TokenPayload, AuthResponse } from "../types/auth";
+import { TokenPayload } from "../types/auth";
+import { Role, ROLES } from "../types/enums";
 
-const otpStore = new Map<string, { otp: string; expiresAt: number }>();
-
-const signupSchema = z.object({
+const registerSchema = z.object({
   name: z.string().min(2),
   email: z.string().email(),
   password: z.string().min(6),
+  role: z.enum(ROLES).optional(),
   phone: z.string().optional(),
-  role: z.nativeEnum(Role).optional().default(Role.WAREHOUSE_WORKER),
 });
 
 const loginSchema = z.object({
   email: z.string().email(),
-  password: z.string().min(1),
+  password: z.string(),
 });
 
-const generateToken = (payload: TokenPayload): string => jwt.sign(payload, env.JWT_SECRET, { expiresIn: "24h" });
+const forgotPasswordSchema = z.object({
+  email: z.string().email(),
+});
+
+const resetPasswordSchema = z.object({
+  email: z.string().email(),
+  otp: z.string().min(4),
+  newPassword: z.string().min(6),
+});
 
 export const signup = async (req: Request, res: Response, next: NextFunction) => {
   try {
-    const data = signupSchema.parse(req.body);
-    const existing = await prisma.user.findUnique({ where: { email: data.email } });
-    if (existing) return next(new AppError(409, "Email already registered", "EMAIL_EXISTS"));
-    const passwordHash = await bcrypt.hash(data.password, 10);
-    const user = await prisma.user.create({ data: { name: data.name, email: data.email, phone: data.phone, passwordHash, role: data.role } });
-    const tokenPayload: TokenPayload = { userId: user.id, email: user.email, role: user.role, assignedWarehouseIds: user.assignedWarehouseIds };
-    const accessToken = generateToken(tokenPayload);
-    res.status(201).json({ data: { user: { id: user.id, name: user.name, email: user.email, role: user.role, assignedWarehouseIds: user.assignedWarehouseIds }, accessToken } });
-  } catch (err: any) { if (err instanceof z.ZodError) return next(new AppError(400, err.errors[0].message, "VALIDATION_ERROR")); next(err); }
+    const parsed = registerSchema.parse(req.body);
+    const existing = await prisma.user.findUnique({ where: { email: parsed.email } });
+    if (existing) throw new AppError(409, "User already exists", "CONFLICT");
+
+    const passwordHash = await bcrypt.hash(parsed.password, 10);
+    const user = await prisma.user.create({
+      data: {
+        name: parsed.name,
+        email: parsed.email,
+        passwordHash,
+        role: parsed.role || Role.WAREHOUSE_WORKER,
+        phone: parsed.phone || null,
+      },
+    });
+
+    const warehouseIds = user.assignedWarehouseIds ? user.assignedWarehouseIds.split(",").filter(Boolean) : [];
+    const tokenPayload: TokenPayload = {
+      userId: user.id,
+      email: user.email,
+      role: user.role,
+      assignedWarehouseIds: warehouseIds,
+    };
+    const token = jwt.sign(tokenPayload, env.JWT_SECRET || "supersecret", { expiresIn: "24h" });
+
+    return sendSuccess(res, { user: { id: user.id, email: user.email, name: user.name, role: user.role }, token }, undefined, 201);
+  } catch (err: any) {
+    const msg = (err as any).issues?.[0]?.message || (err as any).errors?.[0]?.message || err.message;
+    if (err instanceof z.ZodError || err.name === "ZodError") {
+      return next(new AppError(400, msg, "VALIDATION_ERROR"));
+    }
+    return next(err);
+  }
 };
+
+export const register = signup;
 
 export const login = async (req: Request, res: Response, next: NextFunction) => {
   try {
-    const data = loginSchema.parse(req.body);
-    const user = await prisma.user.findUnique({ where: { email: data.email } });
-    if (!user || !user.isActive) return next(new AppError(401, "Invalid email or password", "INVALID_CREDENTIALS"));
-    const isValid = await bcrypt.compare(data.password, user.passwordHash);
-    if (!isValid) return next(new AppError(401, "Invalid email or password", "INVALID_CREDENTIALS"));
-    const tokenPayload: TokenPayload = { userId: user.id, email: user.email, role: user.role, assignedWarehouseIds: user.assignedWarehouseIds };
-    const accessToken = generateToken(tokenPayload);
-    res.json({ data: { user: { id: user.id, name: user.name, email: user.email, role: user.role, assignedWarehouseIds: user.assignedWarehouseIds }, accessToken } });
-  } catch (err: any) { if (err instanceof z.ZodError) return next(new AppError(400, err.errors[0].message, "VALIDATION_ERROR")); next(err); }
-};
+    const parsed = loginSchema.parse(req.body);
+    const user = await prisma.user.findUnique({ where: { email: parsed.email } });
+    if (!user) throw new AppError(401, "Invalid credentials", "UNAUTHORIZED");
 
-export const forgotPassword = async (req: Request, res: Response, next: NextFunction) => {
-  try {
-    const { email } = z.object({ email: z.string().email() }).parse(req.body);
-    const otp = Math.floor(100000 + Math.random() * 900000).toString();
-    otpStore.set(email, { otp, expiresAt: Date.now() + 600000 });
-    res.json({ data: { message: "Reset code generated", demoOtp: otp } });
-  } catch (err) { next(err); }
-};
+    const valid = await bcrypt.compare(parsed.password, user.passwordHash);
+    if (!valid) throw new AppError(401, "Invalid credentials", "UNAUTHORIZED");
 
-export const resetPassword = async (req: Request, res: Response, next: NextFunction) => {
-  try {
-    const { email, otp, newPassword } = z.object({ email: z.string().email(), otp: z.string().length(6), newPassword: z.string().min(6) }).parse(req.body);
-    const record = otpStore.get(email);
-    if (!record || record.otp !== otp || record.expiresAt < Date.now()) return next(new AppError(400, "Invalid or expired OTP", "INVALID_OTP"));
-    const passwordHash = await bcrypt.hash(newPassword, 10);
-    await prisma.user.update({ where: { email }, data: { passwordHash } });
-    otpStore.delete(email);
-    res.json({ data: { message: "Password reset successful" } });
-  } catch (err) { next(err); }
+    const warehouseIds = user.assignedWarehouseIds ? user.assignedWarehouseIds.split(",").filter(Boolean) : [];
+    const tokenPayload: TokenPayload = {
+      userId: user.id,
+      email: user.email,
+      role: user.role,
+      assignedWarehouseIds: warehouseIds,
+    };
+    const token = jwt.sign(tokenPayload, env.JWT_SECRET || "supersecret", { expiresIn: "24h" });
+
+    return sendSuccess(res, { user: { id: user.id, email: user.email, name: user.name, role: user.role }, token });
+  } catch (err: any) {
+    const msg = (err as any).issues?.[0]?.message || (err as any).errors?.[0]?.message || err.message;
+    if (err instanceof z.ZodError || err.name === "ZodError") {
+      return next(new AppError(400, msg, "VALIDATION_ERROR"));
+    }
+    return next(err);
+  }
 };
 
 export const getMe = async (req: Request, res: Response, next: NextFunction) => {
   try {
-    if (!req.user) return next(new AppError(401, "Unauthenticated", "UNAUTHORIZED"));
-    const user = await prisma.user.findUnique({ where: { id: req.user.userId }, select: { id: true, name: true, email: true, phone: true, role: true, assignedWarehouseIds: true, isActive: true, createdAt: true } });
-    if (!user) return next(new AppError(404, "User not found", "NOT_FOUND"));
-    res.json({ data: user });
-  } catch (err) { next(err); }
+    const userId = (req as any).user?.userId;
+    if (!userId) throw new AppError(401, "Not authenticated", "UNAUTHORIZED");
+
+    const user = await prisma.user.findUnique({
+      where: { id: userId },
+      select: { id: true, name: true, email: true, role: true, phone: true, createdAt: true },
+    });
+    if (!user) throw new AppError(404, "User not found", "NOT_FOUND");
+
+    return sendSuccess(res, user);
+  } catch (err) {
+    return next(err);
+  }
+};
+
+export const forgotPassword = async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const parsed = forgotPasswordSchema.parse(req.body);
+    const user = await prisma.user.findUnique({ where: { email: parsed.email } });
+    if (!user) {
+      // Return 200 to prevent user enumeration
+      return sendSuccess(res, { message: "If this email is registered, a password reset OTP has been sent." });
+    }
+    // Prototype Mock OTP
+    return sendSuccess(res, { message: "Password reset OTP sent to email.", demoOtp: "123456" });
+  } catch (err: any) {
+    const msg = (err as any).issues?.[0]?.message || (err as any).errors?.[0]?.message || err.message;
+    if (err instanceof z.ZodError || err.name === "ZodError") {
+      return next(new AppError(400, msg, "VALIDATION_ERROR"));
+    }
+    return next(err);
+  }
+};
+
+export const resetPassword = async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const parsed = resetPasswordSchema.parse(req.body);
+    const user = await prisma.user.findUnique({ where: { email: parsed.email } });
+    if (!user) throw new AppError(400, "Invalid reset request", "BAD_REQUEST");
+
+    const passwordHash = await bcrypt.hash(parsed.newPassword, 10);
+    await prisma.user.update({
+      where: { email: parsed.email },
+      data: { passwordHash },
+    });
+
+    return sendSuccess(res, { message: "Password reset successfully. You can now log in." });
+  } catch (err: any) {
+    const msg = (err as any).issues?.[0]?.message || (err as any).errors?.[0]?.message || err.message;
+    if (err instanceof z.ZodError || err.name === "ZodError") {
+      return next(new AppError(400, msg, "VALIDATION_ERROR"));
+    }
+    return next(err);
+  }
 };

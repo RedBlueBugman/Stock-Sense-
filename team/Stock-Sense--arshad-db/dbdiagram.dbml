@@ -1,0 +1,269 @@
+Enum user_role {
+  ADMIN
+  MANAGER
+  OPERATOR
+  VIEWER
+}
+
+Enum location_type {
+  internal
+  vendor
+  customer
+  loss
+  production
+}
+
+Enum tracking_type {
+  none
+  lot
+  serial
+}
+
+Enum partner_type {
+  supplier
+  customer
+  both
+}
+
+Enum operation_type {
+  receipt
+  delivery
+  internal
+  adjustment
+}
+
+Enum operation_status {
+  draft
+  waiting
+  ready
+  done
+  cancelled
+}
+
+Enum move_status {
+  draft
+  reserved
+  done
+  cancelled
+}
+
+Enum reservation_status {
+  active
+  released
+  expired
+  consumed
+}
+
+Enum alert_type {
+  low_stock
+  out_of_stock
+  expiry_warning
+  reorder_triggered
+}
+
+Enum alert_priority {
+  low
+  medium
+  high
+  critical
+}
+
+Table users {
+  id uuid [pk]
+  email varchar [unique, not null]
+  phone varchar
+  password_hash text [not null]
+  role user_role [not null]
+  is_active boolean [not null]
+  created_at timestamptz [not null]
+  updated_at timestamptz [not null]
+}
+
+Table warehouses {
+  id uuid [pk]
+  name varchar [not null]
+  code varchar [unique, not null]
+  address text
+  is_active boolean [not null]
+  created_at timestamptz [not null]
+  updated_at timestamptz [not null]
+}
+
+Table user_warehouses {
+  user_id uuid [pk]
+  warehouse_id uuid [pk]
+  assigned_at timestamptz
+}
+
+Table locations {
+  id uuid [pk]
+  warehouse_id uuid [not null]
+  parent_location_id uuid
+  name varchar [not null]
+  barcode varchar [unique]
+  location_type location_type [not null]
+  is_active boolean [not null]
+  created_at timestamptz
+  updated_at timestamptz
+}
+
+Table product_categories {
+  id uuid [pk]
+  name varchar [not null]
+  parent_category_id uuid
+  created_at timestamptz
+  updated_at timestamptz
+}
+
+Table products {
+  id uuid [pk]
+  name varchar [not null]
+  sku varchar [unique, not null]
+  barcode varchar [unique]
+  category_id uuid
+  unit_of_measure varchar
+  tracking_type tracking_type
+  image_url text
+  reorder_min decimal
+  reorder_max decimal
+  reorder_qty decimal
+  is_active boolean
+  created_at timestamptz
+  updated_at timestamptz
+}
+
+Table product_lots {
+  id uuid [pk]
+  product_id uuid [not null]
+  lot_number varchar [not null]
+  expiry_date date
+  manufactured_date date
+  created_at timestamptz
+}
+
+Table partners {
+  id uuid [pk]
+  name varchar [not null]
+  type partner_type [not null]
+  email varchar
+  phone varchar
+  address text
+  is_active boolean
+  created_at timestamptz
+  updated_at timestamptz
+}
+
+Table stock_operations {
+  id uuid [pk]
+  reference_code varchar [unique, not null]
+  operation_type operation_type [not null]
+  status operation_status [not null]
+  source_location_id uuid
+  destination_location_id uuid
+  partner_id uuid
+  scheduled_date timestamptz
+  completed_date timestamptz
+  assigned_to uuid
+  approved_by uuid
+  notes text
+  created_at timestamptz
+  updated_at timestamptz
+}
+
+Table stock_moves {
+  id uuid [pk]
+  operation_id uuid [not null]
+  product_id uuid [not null]
+  lot_id uuid
+  quantity decimal(15,4) [not null]
+  unit_of_measure varchar [not null]
+  source_location_id uuid
+  destination_location_id uuid
+  status move_status [not null]
+  created_at timestamptz
+}
+
+Table stock_reservations {
+  id uuid [pk]
+  product_id uuid [not null]
+  location_id uuid [not null]
+  lot_id uuid
+  quantity_reserved decimal(15,4) [not null]
+  operation_id uuid [not null]
+  reserved_by uuid [not null]
+  reserved_at timestamptz
+  expires_at timestamptz
+  status reservation_status
+}
+
+Table reorder_rules {
+  id uuid [pk]
+  product_id uuid [not null]
+  warehouse_id uuid [not null]
+  min_qty decimal(15,4)
+  max_qty decimal(15,4)
+  reorder_qty decimal(15,4)
+  is_active boolean
+  created_at timestamptz
+  updated_at timestamptz
+}
+
+Table alerts {
+  id uuid [pk]
+  type alert_type
+  product_id uuid
+  warehouse_id uuid
+  message text
+  priority alert_priority
+  is_read boolean
+  created_at timestamptz
+}
+
+Table audit_log {
+  id uuid [pk]
+  timestamp timestamptz
+  user_id uuid
+  ip_address inet
+  action varchar
+  entity_type varchar
+  entity_id uuid
+  old_value jsonb
+  new_value jsonb
+  reason text
+}
+
+Ref: user_warehouses.user_id > users.id
+Ref: user_warehouses.warehouse_id > warehouses.id
+
+Ref: locations.warehouse_id > warehouses.id
+Ref: locations.parent_location_id > locations.id
+
+Ref: product_categories.parent_category_id > product_categories.id
+Ref: products.category_id > product_categories.id
+Ref: product_lots.product_id > products.id
+
+Ref: stock_operations.source_location_id > locations.id
+Ref: stock_operations.destination_location_id > locations.id
+Ref: stock_operations.partner_id > partners.id
+Ref: stock_operations.assigned_to > users.id
+Ref: stock_operations.approved_by > users.id
+
+Ref: stock_moves.operation_id > stock_operations.id
+Ref: stock_moves.product_id > products.id
+Ref: stock_moves.lot_id > product_lots.id
+Ref: stock_moves.source_location_id > locations.id
+Ref: stock_moves.destination_location_id > locations.id
+
+Ref: stock_reservations.product_id > products.id
+Ref: stock_reservations.location_id > locations.id
+Ref: stock_reservations.lot_id > product_lots.id
+Ref: stock_reservations.operation_id > stock_operations.id
+Ref: stock_reservations.reserved_by > users.id
+
+Ref: reorder_rules.product_id > products.id
+Ref: reorder_rules.warehouse_id > warehouses.id
+
+Ref: alerts.product_id > products.id
+Ref: alerts.warehouse_id > warehouses.id
+
+Ref: audit_log.user_id > users.id

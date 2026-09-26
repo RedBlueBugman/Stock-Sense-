@@ -1,90 +1,106 @@
-import { Prisma, OperationType, OperationStatus, MoveStatus } from "@prisma/client";
-import { prisma } from "../utils/prisma";
-import { AppError } from "../middleware/errorHandler";
+import prisma from "../utils/prisma";
+import { AppError } from "../utils/errorHandler";
+import { OperationStatus, MoveStatus } from "../types/enums";
 
 export interface CreateOperationInput {
-  operationType: OperationType;
+  operationType: string;
   sourceLocationId: string;
   destinationLocationId: string;
   partnerId?: string;
-  scheduledDate?: Date;
   notes?: string;
-  userId: string;
-  items: Array<{ productId: string; lotId?: string; quantity: number; unitOfMeasure?: string; }>;
+  items: Array<{
+    productId: string;
+    quantity: number;
+    unitOfMeasure?: string;
+    lotId?: string;
+  }>;
 }
 
-export const generateReferenceCode = async (type: OperationType): Promise<string> => {
-  const prefixMap: Record<OperationType, string> = { receipt: "REC", delivery: "DEL", internal: "INT", adjustment: "ADJ" };
-  const year = new Date().getFullYear();
-  const count = await prisma.stockOperation.count({ where: { operationType: type } });
-  const seq = (count + 1).toString().padStart(4, "0");
-  return `${prefixMap[type]}/${year}/${seq}`;
-};
+export const createOperation = async (input: CreateOperationInput, userId?: string) => {
+  if (!input.items || input.items.length === 0) {
+    throw new AppError(400, "Operation must have at least one line item", "BAD_REQUEST");
+  }
 
-export const getStockQuantity = async (productId: string, locationId?: string) => {
-  const incoming = await prisma.stockMove.aggregate({ _sum: { quantity: true }, where: { productId, ...(locationId ? { destinationLocationId: locationId } : {}), status: MoveStatus.done } });
-  const outgoing = await prisma.stockMove.aggregate({ _sum: { quantity: true }, where: { productId, ...(locationId ? { sourceLocationId: locationId } : {}), status: MoveStatus.done } });
-  const inQty = incoming._sum.quantity ? Number(incoming._sum.quantity) : 0;
-  const outQty = outgoing._sum.quantity ? Number(outgoing._sum.quantity) : 0;
-  return inQty - outQty;
-};
+  const prefixMap: Record<string, string> = {
+    receipt: "REC",
+    delivery: "DEL",
+    internal: "INT",
+    adjustment: "ADJ",
+  };
+  const prefix = prefixMap[input.operationType] || "OP";
+  const refCode = `${prefix}-${Date.now().toString().slice(-6)}`;
 
-export const createOperation = async (input: CreateOperationInput) => {
-  const referenceCode = await generateReferenceCode(input.operationType);
-  return await prisma.$transaction(async (tx) => {
-    const operation = await tx.stockOperation.create({
+  return prisma.$transaction(async (tx) => {
+    const op = await tx.stockOperation.create({
       data: {
-        referenceCode,
+        referenceCode: refCode,
         operationType: input.operationType,
+        status: OperationStatus.done,
         sourceLocationId: input.sourceLocationId,
         destinationLocationId: input.destinationLocationId,
-        partnerId: input.partnerId,
-        scheduledDate: input.scheduledDate || new Date(),
-        createdById: input.userId,
-        notes: input.notes,
-        status: OperationStatus.draft,
-        moves: {
-          create: input.items.map((item) => ({
-            productId: item.productId,
-            lotId: item.lotId,
-            quantity: new Prisma.Decimal(item.quantity),
-            unitOfMeasure: item.unitOfMeasure || "pcs",
-            sourceLocationId: input.sourceLocationId,
-            destinationLocationId: input.destinationLocationId,
-            status: MoveStatus.draft,
-          })),
-        },
+        partnerId: input.partnerId || null,
+        notes: input.notes || null,
+        createdById: userId || null,
+        completedDate: new Date(),
       },
-      include: { moves: { include: { product: true } }, sourceLocation: true, destinationLocation: true, partner: true },
     });
-    return operation;
+
+    const moves = [];
+    for (const item of input.items) {
+      const move = await tx.stockMove.create({
+        data: {
+          operationId: op.id,
+          productId: item.productId,
+          lotId: item.lotId || null,
+          quantity: Number(item.quantity),
+          unitOfMeasure: item.unitOfMeasure || "pcs",
+          sourceLocationId: input.sourceLocationId,
+          destinationLocationId: input.destinationLocationId,
+          status: MoveStatus.done,
+        },
+      });
+      moves.push(move);
+    }
+
+    return { ...op, moves };
   });
 };
 
-export const transitionOperation = async (operationId: string, action: "confirm" | "assign" | "validate" | "cancel", userId: string) => {
-  const op = await prisma.stockOperation.findUnique({ where: { id: operationId }, include: { moves: true } });
+export const transitionOperation = async (id: string, action: string, userId?: string) => {
+  const op = await prisma.stockOperation.findUnique({ where: { id: String(id) } });
   if (!op) throw new AppError(404, "Operation not found", "NOT_FOUND");
-  if (op.status === OperationStatus.done) throw new AppError(400, "Completed operations cannot be modified", "IMMUTABLE_OPERATION");
-  if (op.status === OperationStatus.cancelled) throw new AppError(400, "Operation is already cancelled", "OPERATION_CANCELLED");
 
-  if (action === "confirm") {
-    if (op.status !== OperationStatus.draft) throw new AppError(400, "Only draft operations can be confirmed", "INVALID_TRANSITION");
-    return await prisma.stockOperation.update({ where: { id: operationId }, data: { status: OperationStatus.waiting } });
+  let nextStatus: string = op.status;
+  if (action === "validate" || action === "complete") nextStatus = OperationStatus.done;
+  if (action === "cancel") nextStatus = OperationStatus.cancelled;
+  if (action === "mark_ready") nextStatus = OperationStatus.ready;
+
+  return prisma.stockOperation.update({
+    where: { id: String(id) },
+    data: {
+      status: nextStatus,
+      completedDate: nextStatus === OperationStatus.done ? new Date() : undefined,
+      approvedById: userId || null,
+    },
+  });
+};
+
+// Calculate real-time on-hand stock for a product from the double-entry ledger
+export const getStockQuantity = async (productId: string, locationId?: string): Promise<number> => {
+  const whereIn: any = { productId: String(productId), status: MoveStatus.done };
+  const whereOut: any = { productId: String(productId), status: MoveStatus.done };
+
+  if (locationId) {
+    whereIn.destinationLocationId = String(locationId);
+    whereOut.sourceLocationId = String(locationId);
   }
-  if (action === "assign") {
-    return await prisma.stockOperation.update({ where: { id: operationId }, data: { status: OperationStatus.ready, assignedToId: userId } });
-  }
-  if (action === "validate") {
-    return await prisma.$transaction(async (tx) => {
-      await tx.stockMove.updateMany({ where: { operationId }, data: { status: MoveStatus.done } });
-      const updated = await tx.stockOperation.update({ where: { id: operationId }, data: { status: OperationStatus.done, completedDate: new Date(), approvedById: userId }, include: { moves: true } });
-      return updated;
-    });
-  }
-  if (action === "cancel") {
-    return await prisma.$transaction(async (tx) => {
-      await tx.stockMove.updateMany({ where: { operationId }, data: { status: MoveStatus.cancelled } });
-      return await tx.stockOperation.update({ where: { id: operationId }, data: { status: OperationStatus.cancelled } });
-    });
-  }
+
+  const [inMoves, outMoves] = await Promise.all([
+    prisma.stockMove.aggregate({ where: whereIn, _sum: { quantity: true } }),
+    prisma.stockMove.aggregate({ where: whereOut, _sum: { quantity: true } }),
+  ]);
+
+  const qtyIn = inMoves._sum.quantity || 0;
+  const qtyOut = outMoves._sum.quantity || 0;
+  return qtyIn - qtyOut;
 };

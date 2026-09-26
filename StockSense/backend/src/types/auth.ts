@@ -1,19 +1,8 @@
-import { Role } from "@prisma/client";
+import { Role } from "./enums";
 
 export interface TokenPayload {
   userId: string;
   email: string;
-  role: Role;
+  role: Role | string;
   assignedWarehouseIds: string[];
-}
-
-export interface AuthResponse {
-  user: {
-    id: string;
-    name: string;
-    email: string;
-    role: Role;
-    assignedWarehouseIds: string[];
-  };
-  accessToken: string;
 }

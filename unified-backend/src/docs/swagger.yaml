@@ -1,0 +1,572 @@
+openapi: 3.0.3
+info:
+  title: WMS Backend Data Layer API
+  description: |
+    ### Member 3 — Data Layer API Service
+    Provides high-performance CRUD endpoints, inventory queries, stock summaries, dashboard analytics, user management, and reference data for the Warehouse Management System.
+  version: 1.0.0
+servers:
+  - url: http://localhost:3000
+    description: Local / EC2 Development Server
+
+components:
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
+  schemas:
+    PaginationMeta:
+      type: object
+      properties:
+        total:
+          type: integer
+          example: 120
+        page:
+          type: integer
+          example: 1
+        limit:
+          type: integer
+          example: 20
+        totalPages:
+          type: integer
+          example: 6
+
+    ErrorResponse:
+      type: object
+      properties:
+        error:
+          type: object
+          properties:
+            code:
+              type: string
+              example: VALIDATION_ERROR
+            message:
+              type: string
+              example: Invalid input parameters
+            details:
+              type: array
+              items:
+                type: object
+                properties:
+                  field:
+                    type: string
+                    example: sku
+                  message:
+                    type: string
+                    example: SKU is required
+
+    Product:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+          example: "Heavy Duty Steel Rod 10mm"
+        sku:
+          type: string
+          example: "STL-ROD-010"
+        barcode:
+          type: string
+          example: "8901234567890"
+        category_id:
+          type: string
+          format: uuid
+        category_name:
+          type: string
+          example: "Raw Materials"
+        unit_of_measure:
+          type: string
+          example: "pcs"
+        tracking_type:
+          type: string
+          enum: [none, lot, serial]
+          example: "none"
+        reorder_min:
+          type: integer
+          example: 10
+        reorder_max:
+          type: integer
+          example: 100
+        reorder_qty:
+          type: integer
+          example: 25
+        stock_qty:
+          type: number
+          example: 45
+        is_active:
+          type: boolean
+          example: true
+
+    Category:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+          example: "Industrial Metals"
+        parent_category_id:
+          type: string
+          format: uuid
+          nullable: true
+        product_count:
+          type: integer
+          example: 14
+        is_active:
+          type: boolean
+          example: true
+
+    Warehouse:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+          example: "Central Warehouse"
+        code:
+          type: string
+          example: "WH-01"
+        address:
+          type: string
+          example: "100 Logistics Blvd, Industrial Zone"
+        is_active:
+          type: boolean
+          example: true
+
+    Location:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        warehouse_id:
+          type: string
+          format: uuid
+        parent_location_id:
+          type: string
+          format: uuid
+          nullable: true
+        name:
+          type: string
+          example: "Shelf A-101"
+        barcode:
+          type: string
+          example: "WH01-A-101"
+        location_type:
+          type: string
+          example: "internal"
+        total_products:
+          type: integer
+          example: 8
+        total_qty:
+          type: number
+          example: 320
+
+    Partner:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+          example: "Apex Global Supplies Ltd."
+        type:
+          type: string
+          enum: [supplier, customer, both]
+          example: "supplier"
+        email:
+          type: string
+          example: "orders@apexsupplies.com"
+        phone:
+          type: string
+          example: "+1-555-0199"
+        address:
+          type: string
+          example: "45 Port Road"
+        is_active:
+          type: boolean
+          example: true
+
+    DashboardKpis:
+      type: object
+      properties:
+        total_products:
+          type: integer
+          example: 154
+        total_stock_value:
+          type: number
+          example: 125400.50
+        low_stock_count:
+          type: integer
+          example: 8
+        out_of_stock_count:
+          type: integer
+          example: 2
+        pending_receipts:
+          type: integer
+          example: 5
+        pending_deliveries:
+          type: integer
+          example: 3
+        scheduled_transfers:
+          type: integer
+          example: 1
+        today_movements:
+          type: integer
+          example: 42
+
+paths:
+  /health:
+    get:
+      summary: Health check endpoint
+      tags: [System]
+      responses:
+        200:
+          description: API server is operational
+
+  # ---------------- PRODUCTS ----------------
+  /api/v1/products:
+    get:
+      summary: List products with dynamic filters, pagination, and sorting
+      tags: [Products]
+      parameters:
+        - in: query
+          name: page
+          schema: { type: integer, default: 1 }
+        - in: query
+          name: limit
+          schema: { type: integer, default: 20, maximum: 100 }
+        - in: query
+          name: search
+          schema: { type: string }
+          description: Partial search on name or SKU
+        - in: query
+          name: category_id
+          schema: { type: string, format: uuid }
+        - in: query
+          name: stock_status
+          schema: { type: string, enum: [in_stock, low, out] }
+        - in: query
+          name: sort_by
+          schema: { type: string, enum: [name, sku, stock_qty, created_at], default: created_at }
+        - in: query
+          name: sort_order
+          schema: { type: string, enum: [asc, desc], default: desc }
+      responses:
+        200:
+          description: Paginated product list
+    post:
+      summary: Create a new product (INVENTORY_MANAGER)
+      tags: [Products]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name, sku]
+              properties:
+                name: { type: string, example: "Industrial Bolt M8" }
+                sku: { type: string, example: "BLT-M8-001" }
+                barcode: { type: string, example: "8909876543210" }
+                category_id: { type: string, format: uuid }
+                unit_of_measure: { type: string, default: "pcs" }
+                tracking_type: { type: string, enum: [none, lot, serial], default: "none" }
+                reorder_min: { type: integer, default: 0 }
+                reorder_max: { type: integer, default: 0 }
+                reorder_qty: { type: integer, default: 0 }
+                image_url: { type: string, format: uri }
+      responses:
+        201:
+          description: Product created successfully
+
+  /api/v1/products/{id}:
+    get:
+      summary: Get single product detail + stock per location
+      tags: [Products]
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        200:
+          description: Product detail with location stock breakdown
+        404:
+          description: Product not found
+    patch:
+      summary: Update product fields (INVENTORY_MANAGER)
+      tags: [Products]
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name: { type: string }
+                reorder_min: { type: integer }
+                reorder_max: { type: integer }
+      responses:
+        200:
+          description: Product updated
+    delete:
+      summary: Soft delete product (ADMIN) - checks active stock
+      tags: [Products]
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        200:
+          description: Product deactivated
+        400:
+          description: Cannot delete product with active stock
+
+  /api/v1/products/bulk:
+    post:
+      summary: Bulk create products (up to 500 items, wrapped in transaction)
+      tags: [Products]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                products:
+                  type: array
+                  items:
+                    type: object
+                    required: [name, sku]
+                    properties:
+                      name: { type: string }
+                      sku: { type: string }
+      responses:
+        201:
+          description: Bulk insertion report with created/failed counts
+
+  # ---------------- CATEGORIES ----------------
+  /api/v1/categories:
+    get:
+      summary: Flat list of categories with parent references (Cached in Redis)
+      tags: [Categories]
+      parameters:
+        - in: query
+          name: include_counts
+          schema: { type: boolean }
+      responses:
+        200:
+          description: Flat category list
+    post:
+      summary: Create category with parent level duplicate check
+      tags: [Categories]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name]
+              properties:
+                name: { type: string, example: "Fasteners" }
+                parent_category_id: { type: string, format: uuid }
+                description: { type: string }
+      responses:
+        201:
+          description: Category created
+
+  /api/v1/categories/{id}:
+    get:
+      summary: Category detail + direct children + product count
+      tags: [Categories]
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        200:
+          description: Category details
+    patch:
+      summary: Update category with circular reference prevention
+      tags: [Categories]
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name: { type: string }
+                parent_category_id: { type: string, format: uuid }
+      responses:
+        200:
+          description: Category updated
+    delete:
+      summary: Delete category (Only allowed if product count is 0)
+      tags: [Categories]
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        200:
+          description: Category deactivated
+
+  # ---------------- WAREHOUSES & LOCATIONS ----------------
+  /api/v1/warehouses:
+    get:
+      summary: List active warehouses (filtered by user assignment)
+      tags: [Warehouses & Locations]
+      responses:
+        200:
+          description: Active warehouses list
+    post:
+      summary: Create warehouse and auto-create default receiving/shipping docks (ADMIN)
+      tags: [Warehouses & Locations]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name, code]
+              properties:
+                name: { type: string, example: "North Hub" }
+                code: { type: string, example: "WH-02" }
+                address: { type: string }
+      responses:
+        201:
+          description: Warehouse created
+
+  /api/v1/locations:
+    get:
+      summary: List locations in a warehouse with live stock summaries
+      tags: [Warehouses & Locations]
+      parameters:
+        - in: query
+          name: warehouse_id
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        200:
+          description: Locations hierarchy
+    post:
+      summary: Create internal physical location with same-warehouse parent checks
+      tags: [Warehouses & Locations]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [warehouse_id, name]
+              properties:
+                warehouse_id: { type: string, format: uuid }
+                parent_location_id: { type: string, format: uuid }
+                name: { type: string, example: "Bin B-12" }
+                barcode: { type: string, example: "LOC-B12" }
+      responses:
+        201:
+          description: Location created
+
+  # ---------------- DASHBOARD KPIS ----------------
+  /api/v1/dashboard/kpis:
+    get:
+      summary: Aggregated Dashboard KPIs (30s Redis Cache)
+      tags: [Dashboard]
+      parameters:
+        - in: query
+          name: warehouse_id
+          schema: { type: string, format: uuid }
+      responses:
+        200:
+          description: Cached KPI metrics
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: '#/components/schemas/DashboardKpis'
+
+  /api/v1/dashboard/recent-operations:
+    get:
+      summary: Latest stock operations with partner & location details
+      tags: [Dashboard]
+      parameters:
+        - in: query
+          name: limit
+          schema: { type: integer, default: 10 }
+      responses:
+        200:
+          description: Recent operations
+
+  /api/v1/dashboard/low-stock:
+    get:
+      summary: Products at or below reorder threshold
+      tags: [Dashboard]
+      responses:
+        200:
+          description: Low stock product alerts
+
+  /api/v1/dashboard/movement-trend:
+    get:
+      summary: Stock movements grouped by date for charts
+      tags: [Dashboard]
+      parameters:
+        - in: query
+          name: days
+          schema: { type: integer, default: 30 }
+      responses:
+        200:
+          description: Daily movement aggregated series
+
+  # ---------------- SEARCH & REFERENCES ----------------
+  /api/v1/search:
+    get:
+      summary: Global search across Products, Partners, and Locations
+      tags: [Search & References]
+      parameters:
+        - in: query
+          name: q
+          required: true
+          schema: { type: string, example: "steel" }
+      responses:
+        200:
+          description: Grouped search results
+
+  /api/v1/units-of-measure:
+    get:
+      summary: Standard Units of Measure (pcs, kg, liters, etc.)
+      tags: [Search & References]
+      responses:
+        200:
+          description: UoM reference list
+
+  /api/v1/references/operation-statuses:
+    get:
+      summary: Operation statuses and allowed transitions for frontend buttons
+      tags: [Search & References]
+      responses:
+        200:
+          description: Status transition rules
